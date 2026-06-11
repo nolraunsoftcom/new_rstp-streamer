@@ -9,6 +9,7 @@ FetchContent_MakeAvailable(catch2)
 add_executable(nv_unit_tests
   unit/SmokeTest.cpp
   unit/StreamHealthTest.cpp
+  unit/ConnectionStateMachineTest.cpp
 )
 target_include_directories(nv_unit_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(nv_unit_tests PRIVATE nv_domain Catch2::Catch2WithMain)
