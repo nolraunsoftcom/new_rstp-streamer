@@ -3,3 +3,5 @@ build/
 compile_commands.json
 .cache/
 .omc/
+tests/fixtures/*.mkv
+ops/mediamtx/mediamtx
