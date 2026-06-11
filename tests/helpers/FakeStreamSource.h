@@ -18,6 +18,8 @@ public:
     }
 
     // 테스트 헬퍼: 어댑터가 이벤트를 올리는 상황을 흉내낸다.
+    // 수명 계약: 반환 포인터는 리스너 소유자(ChannelController)가 살아있는 동안만 유효.
+    // close() 이후에도 객체는 유효하지만 이벤트는 m_sourceAlive 가드로 무시된다.
     nv::app::StreamSourceListener* listener() { return m_listener; }
     bool isOpen() const { return m_listener != nullptr; }
 

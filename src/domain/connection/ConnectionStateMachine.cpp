@@ -35,6 +35,8 @@ Transition ConnectionStateMachine::retryRequested(TimePoint now) {
 Transition ConnectionStateMachine::sourceAvailableHint(TimePoint now) {
     (void)now;
     if (m_state != ConnState::Failed) return {};  // 정상 재시도 사이클은 영향받지 않는다
+    // 주의: m_attempts는 리셋하지 않는다. 이 probe가 실패하면 즉시 Failed로 복귀한다.
+    // 카운터 리셋은 framePresented(자동) 또는 retryRequested(수동)뿐이다 (D2).
     m_state = ConnState::Connecting;
     m_retryAt.reset();
     return {Action::OpenSource};

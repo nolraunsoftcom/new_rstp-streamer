@@ -72,6 +72,8 @@ void ChannelController::tick() {
         }
         logTransition("tick");
     }
+    // markFailed 직후 apply(OpenSource→health.reset())로 실패 기록이 곧바로 지워질 수 있다.
+    // 의도된 동작: 실패는 로그에 남고, health는 새 사이클 상태를 보여준다.
     apply(t);
 }
 
@@ -107,6 +109,8 @@ void ChannelController::onSourceError(DiagnosisReason reason) {
     const auto stage = (m_sm.state() == ConnState::Streaming) ? HealthStage::PacketFlow
                                                               : HealthStage::RtspSession;
     apply(m_sm.errorOccurred(reason, m_clock.now()));
+    // 의도된 분기: health에는 근접 원인(reason)을 기록한다. give-up 경계에서 SM의
+    // lastReason은 GaveUp(정책 결정)이 되지만, 운영자 진단에는 근접 원인이 더 유용하다.
     m_health.markFailed(stage, reason);
     logTransition("sourceError");
 }
