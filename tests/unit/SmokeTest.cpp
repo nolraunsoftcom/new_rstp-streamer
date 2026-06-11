@@ -1,5 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
+#include "tests/helpers/FakeClock.h"
+#include "tests/helpers/FakeStreamSource.h"
+#include "tests/helpers/FakeLogger.h"
 
-TEST_CASE("smoke: test runner works") {
-    CHECK(1 + 1 == 2);
+TEST_CASE("smoke: 포트와 페이크가 컴파일된다") {
+    nv::test::FakeClock clock;
+    clock.advance(std::chrono::milliseconds(100));
+    nv::test::FakeStreamSource source;
+    nv::test::FakeLogger logger;
+    CHECK(source.openCount == 0);
+    CHECK(logger.entries.empty());
+    CHECK(clock.now().time_since_epoch().count() > 0);
 }
