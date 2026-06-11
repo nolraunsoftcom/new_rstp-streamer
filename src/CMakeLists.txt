@@ -18,6 +18,7 @@ find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets)
 
 add_library(nv_infra STATIC
   infra/system/ControlExecutor.cpp
+  infra/ffmpeg/FfmpegStreamSource.cpp
 )
 target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
 target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG)
