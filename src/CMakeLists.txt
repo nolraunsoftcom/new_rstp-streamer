@@ -16,7 +16,12 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
   libavformat libavcodec libavutil libswscale)
 find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets)
 
-# nv_infra/nv_ui는 Task 2~8에서 소스가 생기면 활성화한다.
+add_library(nv_infra STATIC
+  infra/system/ControlExecutor.cpp
+)
+target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
+target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG)
+target_compile_options(nv_infra PRIVATE -Wall -Wextra -Wpedantic)
 
 qt_add_executable(new_viewer ui/main.cpp)
 target_link_libraries(new_viewer PRIVATE nv_app Qt6::Widgets PkgConfig::FFMPEG)
