@@ -1,9 +1,14 @@
 #include <QApplication>
+#include <QDir>
+#include <QTimer>
+#include <atomic>
 #include <chrono>
+#include <cstdio>
 #include "src/app/ChannelController.h"
 #include "src/app/MarshallingStreamSource.h"
 #include "src/infra/ffmpeg/FfmpegStreamSource.h"
 #include "src/infra/system/ControlExecutor.h"
+#include "src/infra/system/ProcessStats.h"
 #include "src/infra/system/StderrLogger.h"
 #include "src/infra/system/SteadyClock.h"
 #include "src/infra/video/LatestFrameSlot.h"
@@ -53,7 +58,31 @@ int main(int argc, char** argv) {
     QObject::connect(win.tile(), &nv::ui::VideoTileWidget::framePainted, &win,
                      [&] { executor.post([&] { ctrl.onFramePresented(); }); });
 
+    // --- 소크 통계: 60초마다 CSV 1줄 (logs/soak.csv) ---
+    std::atomic<uint64_t> lastSeqForStats{0};
+    QTimer statsTimer;
+    QObject::connect(&statsTimer, &QTimer::timeout, &win, [&] {
+        nv::infra::LatestFrameSlot::Frame f;
+        uint64_t seq = lastSeqForStats.load();
+        if (frameSlot.latest(f, seq)) seq = f.seq;
+        const double fps = (seq - lastSeqForStats.exchange(seq)) / 60.0;
+        std::FILE* csv = std::fopen("logs/soak.csv", "a");
+        if (csv != nullptr) {
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+            std::fprintf(csv, "%lld,%.1f,%.1f\n", static_cast<long long>(ms),
+                         nv::infra::processRssMb(), fps);
+            std::fclose(csv);
+        }
+    });
+    QDir().mkpath(QStringLiteral("logs"));
+    statsTimer.start(60'000);
+
     win.show();
+    if (QApplication::arguments().contains(QStringLiteral("--connect"))) {
+        executor.post([&] { ctrl.connect(); });
+    }
     const int rc = QApplication::exec();
 
     // 종료 순서: UI 멈춤 → 채널 해제(소스 스레드 합류) → executor 정지
