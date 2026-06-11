@@ -1,1 +1,3 @@
-# 라이브러리는 Task 2부터 소스가 생기면 추가된다.
+add_library(nv_domain INTERFACE)
+target_include_directories(nv_domain INTERFACE ${CMAKE_SOURCE_DIR})
+# ConnectionStateMachine.cpp가 생기는 Task 3에서 STATIC으로 전환한다.
