@@ -15,7 +15,7 @@ target_compile_options(nv_app PRIVATE -Wall -Wextra -Wpedantic)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
   libavformat libavcodec libavutil libswscale)
-find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets Core)
+find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets Core Gui GuiPrivate ShaderTools)
 
 add_library(nv_infra STATIC
   infra/system/ControlExecutor.cpp
@@ -41,6 +41,8 @@ add_library(nv_ui STATIC
   ui/shell/MainWindow.cpp
   ui/grid/VideoTileWidget.cpp
   ui/grid/GridView.cpp
+  ui/render/SwVideoRenderer.cpp
+  ui/render/RhiVideoRenderer.cpp
   ui/channels/ChannelDialog.cpp
   ui/channels/ChannelListPanel.cpp
   ui/shell/LogPanel.cpp
@@ -49,8 +51,20 @@ add_library(nv_ui STATIC
   ${CMAKE_SOURCE_DIR}/resources/resources.qrc
 )
 target_include_directories(nv_ui PUBLIC ${CMAKE_SOURCE_DIR})
-target_link_libraries(nv_ui PUBLIC nv_infra Qt6::Widgets)
+# Qt6::GuiPrivate — QRhi(rhi/qrhi.h) 헤더 접근(QRhiWidget GPU 렌더러).
+target_link_libraries(nv_ui PUBLIC nv_infra Qt6::Widgets Qt6::GuiPrivate)
 target_compile_options(nv_ui PRIVATE -Wall -Wextra -Wpedantic)
+
+# QRhiWidget 셰이더 — qsb 컴파일 후 :/shaders/*.qsb 로 노출 (RhiVideoRenderer가 QFile 로드).
+qt6_add_shaders(nv_ui "nv_ui_shaders"
+  BATCHABLE
+  PRECOMPILE
+  PREFIX "/shaders"
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/ui/render"
+  FILES
+    ui/render/texture.vert
+    ui/render/texture.frag
+)
 
 # macOS バンドル アイコン
 if(APPLE)

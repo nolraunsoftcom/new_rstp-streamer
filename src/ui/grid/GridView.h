@@ -4,6 +4,7 @@
 #include <QTimer>
 #include <functional>
 #include <map>
+#include <string>
 #include <vector>
 #include "src/domain/channel/ChannelConfig.h"
 #include "src/ui/shell/RepaintClock.h"
@@ -52,7 +53,7 @@ private:
     QWidget*     m_content = nullptr;   // scroll content widget
     QGridLayout* m_grid    = nullptr;
     struct Tile;
-    std::map<QString, Tile*> m_tiles;             // channelId → tile (영속)
+    std::map<std::string, Tile*> m_tiles;         // channelId → tile (영속, 부채 #13: std::string 키)
     std::vector<QLabel*>     m_placeholders;      // 빈 셀 플레이스홀더 풀 (hide/show)
     std::vector<nv::domain::ChannelConfig> m_lastConfigs;
     int m_lastManualColumns = 0;

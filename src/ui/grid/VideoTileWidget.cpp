@@ -1,46 +1,69 @@
 #include "VideoTileWidget.h"
-#include <QPainter>
+#include <cstdio>
+#include <QVBoxLayout>
+#include "src/app/ports/IVideoRenderer.h"
+#include "src/ui/render/RhiVideoRenderer.h"
+#include "src/ui/render/SwVideoRenderer.h"
 
 namespace nv::ui {
 
 VideoTileWidget::VideoTileWidget(nv::infra::LatestSurfaceSlot& slot, QWidget* parent)
     : QWidget(parent), m_slot(slot) {
     setMinimumSize(320, 240);
-    // 자체 타이머 없음 — 외부 RepaintClock::tick에 pollFrame()을 연결해 사용한다.
+
+    m_layout = new QVBoxLayout(this);
+    m_layout->setContentsMargins(0, 0, 0, 0);
+    m_layout->setSpacing(0);
+
+    // 기본 GPU 경로. QRhi 초기화 실패 시 renderFailed → fallbackToSw().
+    installRenderer(selectRendererKind(/*rhiAvailable=*/true));
+}
+
+void VideoTileWidget::installRenderer(RendererKind kind) {
+    m_kind = kind;
+    if (kind == RendererKind::Rhi) {
+        auto* rhi = new RhiVideoRenderer(this);
+        m_renderer = rhi;
+        connect(rhi, &RhiVideoRenderer::framePainted, this, &VideoTileWidget::framePainted);
+        // QRhi 초기화/렌더 실패 시 런타임 SW 폴백.
+        connect(rhi, &QRhiWidget::renderFailed, this, &VideoTileWidget::fallbackToSw);
+    } else {
+        auto* sw = new SwVideoRenderer(this);
+        m_renderer = sw;
+        connect(sw, &SwVideoRenderer::framePainted, this, &VideoTileWidget::framePainted);
+    }
+    m_layout->addWidget(m_renderer->widget());
+}
+
+void VideoTileWidget::fallbackToSw() {
+    if (m_fellBack || m_kind == RendererKind::Sw) return;
+    // GPU 렌더 경로 실패 — SW(QPainter)로 런타임 전환(영상은 계속 표시). 운영 가시성 1회 로그.
+    std::fprintf(stderr, "[VideoTileWidget] render path = SW (QRhi fallback)\n");
+    m_fellBack = true;
+    // 기존 RHI 위젯 제거 후 SW 렌더러로 교체.
+    QWidget* old = m_renderer->widget();
+    m_layout->removeWidget(old);
+    old->deleteLater();
+    m_renderer = nullptr;
+    m_seq = 0;   // 다음 폴링에서 최신 프레임을 SW로 다시 그리도록
+    installRenderer(RendererKind::Sw);
 }
 
 void VideoTileWidget::pollFrame() {
+    if (m_renderer == nullptr) return;
+    // RGBA 폴링 경로 사용 — GpuTexture 서피스도 B4가 동반 RGBA를 채우므로 그대로 그린다.
+    // (GPU 핸들 직행/zero-copy는 후속 — 여기선 CVPixelBuffer ref 수명 관리가 필요 없어 누수 없음.)
     nv::infra::LatestSurfaceSlot::Frame f;
     if (!m_slot.latest(f, m_seq)) return;
     m_seq = f.seq;
-    m_image = QImage(f.rgba.data(), f.width, f.height, f.width * 4,
-                     QImage::Format_RGBA8888)
-                  .copy();   // 슬롯 버퍼와 수명 분리
-    m_paintedNew = true;
-    update();
-}
 
-void VideoTileWidget::paintEvent(QPaintEvent*) {
-    QPainter p(this);
-    if (m_image.isNull()) {
-        // 레거시 VlcWidget placeholder: #ededed 배경 + #777 14px "No Stream"
-        p.fillRect(rect(), QColor(QStringLiteral("#ededed")));
-        p.setPen(QColor(QStringLiteral("#777777")));
-        QFont f = p.font();
-        f.setPixelSize(14);
-        p.setFont(f);
-        p.drawText(rect(), Qt::AlignCenter, QStringLiteral("No Stream"));
-        return;
-    }
-    p.fillRect(rect(), Qt::black);
-    const QSize scaled = m_image.size().scaled(size(), Qt::KeepAspectRatio);
-    const QRect target(QPoint((width() - scaled.width()) / 2, (height() - scaled.height()) / 2),
-                       scaled);
-    p.drawImage(target, m_image);
-    if (m_paintedNew) {
-        m_paintedNew = false;
-        emit framePainted();   // 표시 확정 — 새 seq를 그렸을 때만
-    }
+    nv::app::FrameSurface surface;
+    surface.kind = nv::app::FrameSurface::Kind::CpuRgba;
+    surface.width = f.width;
+    surface.height = f.height;
+    surface.seq = f.seq;
+    surface.rgba = std::move(f.rgba);
+    m_renderer->present(surface);
 }
 
 } // namespace nv::ui

@@ -35,6 +35,13 @@ void onUnixSignal(int) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // QRhiWidget(GPU 렌더러)가 동작하려면 최상위 윈도우가 QRhi로 컴포지팅(flush)해야 한다.
+    // 이 플래그가 없으면 윈도우가 raster 컴포지팅으로 굳어 나중에 추가된 타일의 QRhiWidget이
+    // QRhi를 못 받아 renderFailed → SW 폴백한다. QApplication 생성 전에 설정해야 적용된다.
+    // (미설정 환경에서도 SW 폴백으로 안전하게 동작하지만, GPU 경로를 켜려면 필요.)
+    if (!qEnvironmentVariableIsSet("QT_WIDGETS_RHI")) {
+        qputenv("QT_WIDGETS_RHI", "1");
+    }
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("영상관리시스템"));
     app.setWindowIcon(QIcon(QStringLiteral(":/logo.png")));

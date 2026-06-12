@@ -1,4 +1,5 @@
 #include "GridView.h"
+#include <set>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -227,9 +228,7 @@ void GridView::relayout()
         const QSize cellSize(w, cellH);
 
         if (cfg != nullptr) {
-            auto* tile = m_tiles.count(QString::fromStdString(cfg->id))
-                             ? m_tiles[QString::fromStdString(cfg->id)]
-                             : nullptr;
+            auto* tile = m_tiles.count(cfg->id) ? m_tiles[cfg->id] : nullptr;
             if (tile != nullptr) {
                 // 레거시 패턴: 이미 해당 위치에 있지 않으면 재배치
                 auto* existing = m_grid->itemAtPosition(r, c);
@@ -304,12 +303,12 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
     m_lastManualColumns = manualColumns;
 
     // ── diff: configs에 없는 기존 타일 삭제 ─────────────────────────────
-    QSet<QString> newIds;
+    std::set<std::string> newIds;
     for (const auto& cfg : configs) {
-        newIds.insert(QString::fromStdString(cfg.id));
+        newIds.insert(cfg.id);
     }
     for (auto it = m_tiles.begin(); it != m_tiles.end(); ) {
-        if (!newIds.contains(it->first)) {
+        if (newIds.find(it->first) == newIds.end()) {
             delete it->second;
             it = m_tiles.erase(it);
         } else {
@@ -319,10 +318,9 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
 
     // ── diff: 새 채널 타일 생성 + 기존 타일 이름 라벨 갱신 ──────────────
     for (const auto& cfg : configs) {
-        const QString qId   = QString::fromStdString(cfg.id);
         const QString qName = QString::fromStdString(cfg.name);
 
-        auto tileIt = m_tiles.find(qId);
+        auto tileIt = m_tiles.find(cfg.id);
         if (tileIt != m_tiles.end()) {
             // 기존 타일: 이름만 갱신 (파괴 금지)
             tileIt->second->name = qName;
@@ -333,7 +331,7 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
             if (slot == nullptr) continue;
 
             auto* tile = new Tile(*slot, cfg.id, qName, m_content);
-            m_tiles[qId] = tile;
+            m_tiles[cfg.id] = tile;
 
             // 단일 RepaintClock tick에 pollFrame 연결 (자체 타이머 없음)
             connect(&m_repaintClock, &RepaintClock::tick,
@@ -390,7 +388,7 @@ void GridView::updateTileStatus(const QString& channelId, const QString& state, 
                                 const QList<int>& stages, double pps, qlonglong msSince,
                                 const QString& reason)
 {
-    auto it = m_tiles.find(channelId);
+    auto it = m_tiles.find(channelId.toStdString());
     if (it == m_tiles.end()) return;
     Tile* t = it->second;
 
