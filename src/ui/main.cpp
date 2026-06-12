@@ -4,6 +4,7 @@
 #include <QMetaObject>
 #include <QSocketNotifier>
 #include <QStandardPaths>
+#include <QStyleHints>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -46,6 +47,11 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("영상관리시스템"));
     app.setWindowIcon(QIcon(QStringLiteral(":/logo.png")));
+
+    // UI 전체가 라이트 톤 고정 스타일시트(#f0f0f0 등)로 구성돼 있어, macOS 다크 모드에서는
+    // 스타일을 안 입힌 시스템 다이얼로그(QMessageBox 등)가 다크 팔레트의 흰 글자를 받아
+    // "밝은 배경 + 흰 글씨"로 깨진다. 색 구성표를 라이트로 고정해 팔레트를 일치시킨다.
+    app.styleHints()->setColorScheme(Qt::ColorScheme::Light);
 
     // --- infra ---
     nv::infra::SteadyClock clock;
