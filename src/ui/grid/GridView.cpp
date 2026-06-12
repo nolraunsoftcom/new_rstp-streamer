@@ -166,8 +166,9 @@ void GridView::relayout()
     const int viewportHeight = viewport()->height();
 
     // 셀 크기
-    const int cellW = qMax(1, (viewportWidth - (cols - 1) * kGridSpacing) / cols);
-    const int cellH = cellW * 3 / 4 + kInfoBarHeight;
+    const int cellW    = qMax(1, (viewportWidth - (cols - 1) * kGridSpacing) / cols);
+    const int leftover = viewportWidth - (cellW * cols + (cols - 1) * kGridSpacing);
+    const int cellH    = cellW * 3 / 4 + kInfoBarHeight;
 
     // 행 수 (레거시 공식)
     const int requiredRows    = qMax(1, (maxGridIndex + cols) / cols);
@@ -182,8 +183,6 @@ void GridView::relayout()
         cellH == m_cachedCellH) {
         return;
     }
-
-    const QSize cellSize(cellW, cellH);
 
     // ── occupied 맵 구성: gridIndex → config ─────────────────────────────
     // gridIndex가 totalCells 범위 밖이면 비어있는 가장 앞 셀로 fallback
@@ -218,6 +217,10 @@ void GridView::relayout()
         const int c = i % cols;
 
         const nv::domain::ChannelConfig* cfg = occupied.value(i, nullptr);
+
+        // 마지막 열은 정수 나눗셈 나머지를 흡수해 우측 검정 띠 제거
+        const int w = cellW + (c == cols - 1 ? leftover : 0);
+        const QSize cellSize(w, cellH);
 
         if (cfg != nullptr) {
             auto* tile = m_tiles.count(QString::fromStdString(cfg->id))
