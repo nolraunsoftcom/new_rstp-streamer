@@ -19,6 +19,7 @@ find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets Core)
 
 add_library(nv_infra STATIC
   infra/system/ControlExecutor.cpp
+  infra/system/SoakLogger.cpp
   infra/ffmpeg/FfmpegStreamSource.cpp
   infra/ffmpeg/ChannelSourceFactory.cpp
   infra/persist/JsonChannelRepository.cpp

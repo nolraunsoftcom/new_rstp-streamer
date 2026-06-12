@@ -4,13 +4,9 @@
 #include <QMetaObject>
 #include <QSocketNotifier>
 #include <QStandardPaths>
-#include <QTimer>
 #include <atomic>
 #include <chrono>
 #include <csignal>
-#include <cstdio>
-#include <cstdint>
-#include <map>
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -19,7 +15,7 @@
 #include "src/infra/persist/JsonChannelRepository.h"
 #include "src/infra/system/CompositeLogger.h"
 #include "src/infra/system/ControlExecutor.h"
-#include "src/infra/system/ProcessStats.h"
+#include "src/infra/system/SoakLogger.h"
 #include "src/infra/system/SteadyClock.h"
 #include "src/ui/channels/ChannelListPanel.h"
 #include "src/ui/grid/GridView.h"
@@ -178,33 +174,10 @@ int main(int argc, char** argv) {
     executor.post([&, autoConnect] { mgr.restore(autoConnect); });
 
     // --- 소크 통계 (60초마다 RSS + 표시 fps 기록 — 4컬럼) ---
-    QDir().mkpath(QStringLiteral("logs"));
-    QTimer statsTimer;
-    std::map<std::string, uint64_t> lastSeqs;
-    QObject::connect(&statsTimer, &QTimer::timeout, &win, [&factory, &lastSeqs] {
-        std::FILE* csv = std::fopen("logs/soak.csv", "a");
-        if (csv != nullptr) {
-            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::system_clock::now().time_since_epoch())
-                                .count();
-            double fpsTotal = 0.0;
-            int active = 0;
-            for (const auto& id : factory.slotIds()) {
-                if (auto* s = factory.slot(id)) {
-                    nv::infra::LatestFrameSlot::Frame f;
-                    uint64_t seq = lastSeqs[id];
-                    if (s->latest(f, seq)) seq = f.seq;
-                    const uint64_t prev = lastSeqs[id];
-                    if (seq > prev) { fpsTotal += (seq - prev) / 60.0; ++active; }
-                    lastSeqs[id] = seq;
-                }
-            }
-            std::fprintf(csv, "%lld,%.1f,%.1f,%d\n", static_cast<long long>(ms),
-                         nv::infra::processRssMb(), fpsTotal, active);
-            std::fclose(csv);
-        }
-    });
-    statsTimer.start(60'000);
+    const QString logsDir = cfgDir + QStringLiteral("/logs");
+    QDir().mkpath(logsDir);
+    nv::infra::SoakLogger soakLogger(factory, logsDir + QStringLiteral("/soak.csv"));
+    soakLogger.start(60'000);
 
     const int rc = QApplication::exec();
     // Fix 4: 명시적 teardown — 콜백 해제 → 채널 정리 → 큐 비움 (스택 수명 의존 제거)
