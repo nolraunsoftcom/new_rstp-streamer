@@ -6,6 +6,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include "src/ui/common/Confirm.h"
 
 namespace nv::ui {
 
@@ -67,14 +68,10 @@ ChannelListPanel::ChannelListPanel(Callbacks cb, QWidget* parent)
         if (chosen == actEdit) m_cb.editRequested(id);
         else if (chosen == actRetry) m_cb.retryRequested(id);
         else if (chosen == actRemove) {
-            // U1: 삭제 확인 다이얼로그
+            // U1: 삭제 확인 다이얼로그 (F5: confirmDelete 헬퍼)
             const QString chName = QString::fromStdString(
                 m_configs[static_cast<size_t>(row)].name);
-            const auto ans = QMessageBox::question(
-                this, QStringLiteral("채널 삭제"),
-                QStringLiteral("'%1' 채널을 삭제하시겠습니까?").arg(chName),
-                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-            if (ans == QMessageBox::Yes) m_cb.removeRequested(id);
+            if (nv::ui::confirmDelete(this, chName)) m_cb.removeRequested(id);
         }
     });
     bodyLayout->addWidget(m_list, 1);
@@ -95,14 +92,10 @@ ChannelListPanel::ChannelListPanel(Callbacks cb, QWidget* parent)
         if (!item) return;
         const int row = m_list->row(item);
         if (row >= 0 && row < static_cast<int>(m_configs.size())) {
-            // U1: 삭제 확인 다이얼로그
+            // U1: 삭제 확인 다이얼로그 (F5: confirmDelete 헬퍼)
             const QString chName = QString::fromStdString(
                 m_configs[static_cast<size_t>(row)].name);
-            const auto ans = QMessageBox::question(
-                this, QStringLiteral("채널 삭제"),
-                QStringLiteral("'%1' 채널을 삭제하시겠습니까?").arg(chName),
-                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-            if (ans == QMessageBox::Yes)
+            if (nv::ui::confirmDelete(this, chName))
                 m_cb.removeRequested(m_configs[static_cast<size_t>(row)].id);
         }
     });

@@ -1,4 +1,6 @@
 #include "GridView.h"
+#include <algorithm>
+#include <set>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -11,8 +13,9 @@
 #include <QVBoxLayout>
 #include "src/domain/layout/GridRules.h"
 #include "src/infra/ffmpeg/ChannelSourceFactory.h"
-#include "src/infra/video/LatestFrameSlot.h"
+#include "src/infra/video/LatestSurfaceSlot.h"
 #include "src/ui/grid/VideoTileWidget.h"
+#include "src/ui/common/Confirm.h"
 
 namespace nv::ui {
 
@@ -58,7 +61,7 @@ struct GridView::Tile : public QWidget {
     std::string      channelId;
     QString          name;
 
-    Tile(nv::infra::LatestFrameSlot& slot, std::string id, QString nm, QWidget* parent)
+    Tile(nv::infra::LatestSurfaceSlot& slot, std::string id, QString nm, QWidget* parent)
         : QWidget(parent), channelId(std::move(id)), name(std::move(nm))
     {
         auto* mainLay = new QVBoxLayout(this);
@@ -120,8 +123,10 @@ struct GridView::Tile : public QWidget {
 
 // ─────────────────────────────────────────────────────────────────────────
 
-GridView::GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb, QWidget* parent)
-    : QScrollArea(parent), m_slots(slotRegistry), m_cb(std::move(cb))
+GridView::GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb,
+                   RepaintClock& repaintClock, QWidget* parent)
+    : QScrollArea(parent), m_slots(slotRegistry), m_cb(std::move(cb)),
+      m_repaintClock(repaintClock)
 {
     // 레거시 스크롤 영역 설정: 수직 스크롤 항상 표시(viewport 폭 진동 방지), 수평 없음, 프레임 없음, 검정 배경
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
@@ -169,7 +174,7 @@ void GridView::relayout()
 
     // 셀 크기
     const int cellW    = qMax(1, (viewportWidth - (cols - 1) * kGridSpacing) / cols);
-    const int leftover = viewportWidth - (cellW * cols + (cols - 1) * kGridSpacing);
+    const int leftover = std::max(0, viewportWidth - (cellW * cols + (cols - 1) * kGridSpacing));  // F2: 음수 방지
     const int cellH    = cellW * 3 / 4 + kInfoBarHeight;
 
     // 행 수 (레거시 공식)
@@ -211,6 +216,10 @@ void GridView::relayout()
         }
     }
 
+    // ── F1: 재배치 시작 전 모든 아이템을 레이아웃에서 detach — 위젯은 보존, QLayoutItem만 삭제
+    // itemAtPosition 분기 없이 매번 깨끗이 재구성 → 스왑/삭제 후 기하 충돌 원천 차단
+    while (QLayoutItem* it = m_grid->takeAt(0)) { delete it; }
+
     // ── 셀 배치 — 위젯 파괴 절대 금지; 재배치 + 크기갱신만 ───────────────
     int placeholderUsed = 0;
 
@@ -225,15 +234,9 @@ void GridView::relayout()
         const QSize cellSize(w, cellH);
 
         if (cfg != nullptr) {
-            auto* tile = m_tiles.count(QString::fromStdString(cfg->id))
-                             ? m_tiles[QString::fromStdString(cfg->id)]
-                             : nullptr;
+            auto* tile = m_tiles.count(cfg->id) ? m_tiles[cfg->id] : nullptr;
             if (tile != nullptr) {
-                // 레거시 패턴: 이미 해당 위치에 있지 않으면 재배치
-                auto* existing = m_grid->itemAtPosition(r, c);
-                if (!existing || existing->widget() != tile) {
-                    m_grid->addWidget(tile, r, c);
-                }
+                m_grid->addWidget(tile, r, c);  // detach 후 무조건 1회 등록 — 이중등록 불가
                 if (tile->size() != cellSize) {
                     tile->setFixedSize(cellSize);
                 }
@@ -255,10 +258,7 @@ void GridView::relayout()
         }
         ++placeholderUsed;
 
-        auto* existing = m_grid->itemAtPosition(r, c);
-        if (!existing || existing->widget() != ph) {
-            m_grid->addWidget(ph, r, c);
-        }
+        m_grid->addWidget(ph, r, c);  // detach 후 무조건 1회 등록
         if (ph->size() != cellSize) {
             ph->setFixedSize(cellSize);
         }
@@ -302,12 +302,12 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
     m_lastManualColumns = manualColumns;
 
     // ── diff: configs에 없는 기존 타일 삭제 ─────────────────────────────
-    QSet<QString> newIds;
+    std::set<std::string> newIds;
     for (const auto& cfg : configs) {
-        newIds.insert(QString::fromStdString(cfg.id));
+        newIds.insert(cfg.id);
     }
     for (auto it = m_tiles.begin(); it != m_tiles.end(); ) {
-        if (!newIds.contains(it->first)) {
+        if (newIds.find(it->first) == newIds.end()) {
             delete it->second;
             it = m_tiles.erase(it);
         } else {
@@ -317,10 +317,9 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
 
     // ── diff: 새 채널 타일 생성 + 기존 타일 이름 라벨 갱신 ──────────────
     for (const auto& cfg : configs) {
-        const QString qId   = QString::fromStdString(cfg.id);
         const QString qName = QString::fromStdString(cfg.name);
 
-        auto tileIt = m_tiles.find(qId);
+        auto tileIt = m_tiles.find(cfg.id);
         if (tileIt != m_tiles.end()) {
             // 기존 타일: 이름만 갱신 (파괴 금지)
             tileIt->second->name = qName;
@@ -331,7 +330,11 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
             if (slot == nullptr) continue;
 
             auto* tile = new Tile(*slot, cfg.id, qName, m_content);
-            m_tiles[qId] = tile;
+            m_tiles[cfg.id] = tile;
+
+            // 단일 RepaintClock tick에 pollFrame 연결 (자체 타이머 없음)
+            connect(&m_repaintClock, &RepaintClock::tick,
+                    tile->video, &VideoTileWidget::pollFrame);
 
             connect(tile->video, &VideoTileWidget::framePainted, this,
                     [this, id = cfg.id] { m_cb.framePainted(id); });
@@ -357,12 +360,8 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
                 if (chosen == actEdit)        m_cb.editRequested(tile->channelId);
                 else if (chosen == actRetry)  m_cb.retryRequested(tile->channelId);
                 else if (chosen == actRemove) {
-                    // U1: 삭제 확인 다이얼로그
-                    const auto ans = QMessageBox::question(
-                        tile, QStringLiteral("채널 삭제"),
-                        QStringLiteral("'%1' 채널을 삭제하시겠습니까?").arg(tile->name),
-                        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-                    if (ans == QMessageBox::Yes) m_cb.removeRequested(tile->channelId);
+                    // U1: 삭제 확인 다이얼로그 (F5: confirmDelete 헬퍼)
+                    if (nv::ui::confirmDelete(tile, tile->name)) m_cb.removeRequested(tile->channelId);
                 }
                 else if (chosen != nullptr && !chosen->data().isNull())
                     m_cb.swapRequested(tile->channelId,
@@ -384,7 +383,7 @@ void GridView::updateTileStatus(const QString& channelId, const QString& state, 
                                 const QList<int>& stages, double pps, qlonglong msSince,
                                 const QString& reason)
 {
-    auto it = m_tiles.find(channelId);
+    auto it = m_tiles.find(channelId.toStdString());
     if (it == m_tiles.end()) return;
     Tile* t = it->second;
 

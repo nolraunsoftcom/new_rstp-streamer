@@ -4,8 +4,10 @@
 #include <QTimer>
 #include <functional>
 #include <map>
+#include <string>
 #include <vector>
 #include "src/domain/channel/ChannelConfig.h"
+#include "src/ui/shell/RepaintClock.h"
 
 class QGridLayout;
 class QWidget;
@@ -29,7 +31,8 @@ public:
         std::function<void(std::string idA, std::string idB)> swapRequested;
     };
 
-    GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb, QWidget* parent = nullptr);
+    GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb,
+             RepaintClock& repaintClock, QWidget* parent = nullptr);
 
     // 채널 목록 변경 시 호출: diff 기반 타일 추가/삭제 후 relayout()
     void rebuild(const std::vector<nv::domain::ChannelConfig>& configs, int manualColumns);
@@ -46,10 +49,11 @@ private:
 
     nv::infra::ChannelSourceFactory* m_slots = nullptr;
     Callbacks m_cb;
+    RepaintClock& m_repaintClock;
     QWidget*     m_content = nullptr;   // scroll content widget
     QGridLayout* m_grid    = nullptr;
     struct Tile;
-    std::map<QString, Tile*> m_tiles;             // channelId → tile (영속)
+    std::map<std::string, Tile*> m_tiles;         // channelId → tile (영속, 부채 #13: std::string 키)
     std::vector<QLabel*>     m_placeholders;      // 빈 셀 플레이스홀더 풀 (hide/show)
     std::vector<nv::domain::ChannelConfig> m_lastConfigs;
     int m_lastManualColumns = 0;

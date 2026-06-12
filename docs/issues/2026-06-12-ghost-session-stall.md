@@ -1,6 +1,6 @@
 # 이슈: 유령 RTSP 세션 청소 시점에 현재 스트림이 멈춤 (직결, voxl-streamer)
 
-상태: **원인 확정** (장비 소스코드 분석으로 H-A 검증 완료) + 우리측 완화 배포 완료
+상태: **해결 — 장비측 수정 배포·E1 검증 완료(3/3)** + 우리측 완화 배포 완료
 발견: 2026-06-12 1시간 스트림 테스트 (`logs/` 1032 세트)
 영향: 직결 모드에서 ~75초 주기 스트림 단절 반복 (viewer는 매회 무개입 자동 복구 — 클라이언트 영향은 가용성 저하뿐)
 
@@ -88,6 +88,23 @@ if (removed > 0){
 
 - viewer 평가: 이 이슈 동안 15/15 무개입 자동 복구, 진단 코드 일관(NoPackets), 자원 누수 없음 — 클라이언트 견고성 목표는 충족. 패킷 흐름 실시간 표시(`82bd1a8`)로 이후 관찰은 즉시 가시화됨.
 - 데이터: `logs/viewer-1h-20260612-1032.log`, `logs/device-1h-20260612-1032.log`, `logs/csv-1h-20260612-1032.csv`, `logs/netstat-1h-20260612-1032.log`
+
+## 장비측 근본 수정 (2026-06-12 밤, 해결)
+
+voxl-streamer를 포크(`~/nolsoft/ziilab/voxl/voxl-ziilab-streamer`, GitHub
+nolraunsoftcom/voxl-custom-streamer, ziilab 브랜치)해서 `timeout()`의 무조건
+감소를 `gst_rtsp_session_pool_get_n_sessions()` 동기화로 교체. 패키지
+`voxl-ziilab-streamer 0.8.1+ziilab.2`로 장비에 배포(업스트림 voxl-streamer
+0.8.0 대체, Conflicts/Replaces/versioned Provides).
+
+**E1 검증 3/3 PASS**: 산 클라이언트 스트리밍 중 고의 유령 생성 ×3 — 매회
+`Removed 1 sessions` + `1 live sessions remain after cleanup`(신규 로그),
+프레임 무중단(총 287s/7,214프레임). H-A 단독 원인으로 확정, gst 내부
+shared-media-unprepare(보조가설)는 기여하지 않음이 확인됨. ~75초 단절 루프의
+진입점 소멸. 상세: 포크 repo `docs/ghost-session-fix-verification.md`.
+
+부수 발견: 0.8.1부터 플랫폼 매크로(`PLATFORM_QRB5165`) 없이 빌드하면
+인코더가 빠져 모든 PLAY가 454로 실패 — 빌드 환경 주의사항은 포크 문서 참고.
 
 ## 추가 사건 (2026-06-12 저녁): 신규 유령 공급 경로 — UI 행(hang)
 

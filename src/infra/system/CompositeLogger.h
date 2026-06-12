@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <mutex>
 #include <QString>
 #include "src/infra/system/StderrLogger.h"
 
@@ -11,12 +12,17 @@ class CompositeLogger final : public nv::app::ILogger {
 public:
     using Callback = std::function<void(QString)>;
 
-    void setCallback(Callback cb) { m_callback = std::move(cb); }
+    // log()와 동시 호출 안전 — m_mu로 콜백 교체·호출을 직렬화한다.
+    void setCallback(Callback cb) {
+        std::lock_guard lk(m_mu);
+        m_callback = std::move(cb);
+    }
 
     void log(nv::app::LogLevel level, std::string_view channelId, std::string_view component,
              std::string_view message,
              nv::domain::DiagnosisReason reason = nv::domain::DiagnosisReason::None) override {
         m_stderr.log(level, channelId, component, message, reason);
+        std::lock_guard lk(m_mu);
         if (m_callback) {
             // 로그 탭 표시용: "[채널][컴포넌트] 메시지" 형식
             QString text;
@@ -34,6 +40,7 @@ public:
 
 private:
     StderrLogger m_stderr;
+    mutable std::mutex m_mu;
     Callback m_callback;
 };
 

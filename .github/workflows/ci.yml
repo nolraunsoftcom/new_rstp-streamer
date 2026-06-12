@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main, m2b-performance]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ──────────────────────────────────────────────
+  # macOS — Homebrew FFmpeg + Qt6, pkg-config 경로
+  # ──────────────────────────────────────────────
+  build-macos:
+    name: macOS (Homebrew FFmpeg + Qt6)
+    runs-on: macos-14   # Apple Silicon (arm64)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (brew)
+        run: |
+          brew update
+          brew install ffmpeg qt@6 pkg-config
+
+      - name: Configure (CMake)
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="/opt/homebrew;/opt/homebrew/opt/qt@6" \
+            -DCMAKE_POLICY_DEFAULT_CMP0167=NEW
+
+      - name: Build
+        run: cmake --build build -j$(sysctl -n hw.ncpu)
+
+      - name: Unit tests (no integration)
+        run: ctest --test-dir build -LE integration --output-on-failure
+
+      # GPL-absence check: vcpkg.json must not declare any GPL features (x264/x265/etc.)
+      - name: Verify GPL-free (vcpkg.json)
+        run: |
+          echo "=== GPL-free check ==="
+          if grep -Ei '"(x264|x265|openssl|gpl)"' vcpkg.json; then
+            echo "FAIL: GPL-enabling feature found in vcpkg.json" >&2
+            exit 1
+          fi
+          echo "PASS: no GPL features in vcpkg.json"
+
+      # Integration tests (mediamtx download) — failures don't block the job
+      - name: Download mediamtx (integration prerequisite)
+        continue-on-error: true
+        run: bash ops/mediamtx/download.sh
+
+      - name: Integration tests
+        continue-on-error: true
+        run: ctest --test-dir build -L integration --output-on-failure
+
+  # ──────────────────────────────────────────────
+  # Windows — vcpkg FFmpeg (dynamic/GPL-free) + Qt via aqtinstall
+  # best-effort: 이 세션에서 Windows 실환경 미검증 (보고서 참조)
+  # ──────────────────────────────────────────────
+  build-windows:
+    name: Windows (vcpkg FFmpeg + Qt6)
+    runs-on: windows-2022
+
+    env:
+      VCPKG_ROOT: C:\vcpkg
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+        shell: cmd
+
+      - name: Install Qt6 via aqtinstall
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: ''
+          cache: true
+
+      - name: Configure (CMake + vcpkg toolchain)
+        run: |
+          cmake -B build -S . `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
+        shell: pwsh
+
+      - name: Build
+        run: cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
+        shell: pwsh
+
+      - name: Unit tests (no integration)
+        run: ctest --test-dir build -C Release -LE integration --output-on-failure
+        shell: pwsh
+
+      # GPL-absence check on Windows (same logic as macOS)
+      - name: Verify GPL-free (vcpkg.json)
+        run: |
+          $content = Get-Content vcpkg.json -Raw
+          if ($content -match '"(x264|x265|openssl|gpl)"') {
+            Write-Error "FAIL: GPL-enabling feature found in vcpkg.json"
+            exit 1
+          }
+          Write-Host "PASS: no GPL features in vcpkg.json"
+        shell: pwsh

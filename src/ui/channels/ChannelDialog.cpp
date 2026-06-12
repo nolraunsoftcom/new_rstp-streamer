@@ -32,9 +32,10 @@ void ChannelDialog::accept() {
                              QStringLiteral("채널 이름을 입력하세요."));
         return;
     }
+    // F6: RFC 스킴 대소문자 무관 — Qt::CaseInsensitive로 RTSP://, Rtsp:// 등도 허용
     const QString u = url();
-    if (!u.startsWith(QStringLiteral("rtsp://")) &&
-        !u.startsWith(QStringLiteral("rtsps://"))) {
+    if (!u.startsWith(QStringLiteral("rtsp://"), Qt::CaseInsensitive) &&
+        !u.startsWith(QStringLiteral("rtsps://"), Qt::CaseInsensitive)) {
         QMessageBox::warning(this, QStringLiteral("입력 오류"),
                              QStringLiteral("URL은 rtsp:// 또는 rtsps://로 시작해야 합니다."));
         return;

@@ -4,9 +4,14 @@
 
 namespace nv::app {
 
-// S2: rtsp:// 또는 rtsps:// 스킴만 허용
+// S2: rtsp:// 또는 rtsps:// 스킴만 허용 (F6: RFC 스킴 대소문자 무관 — 소문자 변환 후 비교)
 static bool isValidRtspUrl(const std::string& url) {
-    return url.rfind("rtsp://", 0) == 0 || url.rfind("rtsps://", 0) == 0;
+    // 스킴 최대 길이 8 ("rtsps://") 만큼만 소문자로 변환해 비교
+    const size_t prefixLen = std::min(url.size(), size_t(8));
+    std::string lower(url.begin(), url.begin() + static_cast<std::ptrdiff_t>(prefixLen));
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lower.rfind("rtsp://", 0) == 0 || lower.rfind("rtsps://", 0) == 0;
 }
 
 using nv::domain::ChannelConfig;
@@ -41,6 +46,13 @@ ChannelManager::Entry& ChannelManager::makeEntry(ChannelConfig cfg) {
 void ChannelManager::restore(bool autoConnect) {
     for (auto& cfg : m_repo.load()) {
         if (channelCount() >= m_maxChannels) break;
+        // F4: restore 경로도 URL 검증 — 부적합 항목은 스킵 + 경고 로그
+        if (!isValidRtspUrl(cfg.url)) {
+            m_logger.log(LogLevel::Warn, cfg.id, "ChannelManager",
+                         "invalid url skipped on restore",
+                         nv::domain::DiagnosisReason::DeviceUnreachable);
+            continue;
+        }
         makeEntry(cfg);
     }
     if (autoConnect) connectAll();

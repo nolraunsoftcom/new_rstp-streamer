@@ -4,13 +4,9 @@
 #include <QMetaObject>
 #include <QSocketNotifier>
 #include <QStandardPaths>
-#include <QTimer>
 #include <atomic>
 #include <chrono>
 #include <csignal>
-#include <cstdio>
-#include <cstdint>
-#include <map>
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -19,11 +15,12 @@
 #include "src/infra/persist/JsonChannelRepository.h"
 #include "src/infra/system/CompositeLogger.h"
 #include "src/infra/system/ControlExecutor.h"
-#include "src/infra/system/ProcessStats.h"
+#include "src/infra/system/SoakLogger.h"
 #include "src/infra/system/SteadyClock.h"
 #include "src/ui/channels/ChannelListPanel.h"
 #include "src/ui/grid/GridView.h"
 #include "src/ui/shell/ControlBridge.h"
+#include "src/ui/shell/RepaintClock.h"
 #include "src/ui/shell/LogPanel.h"
 #include "src/ui/shell/MainWindow.h"
 
@@ -38,6 +35,13 @@ void onUnixSignal(int) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // QRhiWidget(GPU 렌더러)가 동작하려면 최상위 윈도우가 QRhi로 컴포지팅(flush)해야 한다.
+    // 이 플래그가 없으면 윈도우가 raster 컴포지팅으로 굳어 나중에 추가된 타일의 QRhiWidget이
+    // QRhi를 못 받아 renderFailed → SW 폴백한다. QApplication 생성 전에 설정해야 적용된다.
+    // (미설정 환경에서도 SW 폴백으로 안전하게 동작하지만, GPU 경로를 켜려면 필요.)
+    if (!qEnvironmentVariableIsSet("QT_WIDGETS_RHI")) {
+        qputenv("QT_WIDGETS_RHI", "1");
+    }
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("영상관리시스템"));
     app.setWindowIcon(QIcon(QStringLiteral(":/logo.png")));
@@ -69,6 +73,9 @@ int main(int argc, char** argv) {
                                   Q_ARG(QString, text));
     });
 
+    // 앱 전체 단일 repaint 타이머 — 타일별 30Hz 타이머(20ch=600Hz) 대신 1개
+    nv::ui::RepaintClock repaintClock;
+
     // GridView callbacks
     nv::ui::MainWindow* winPtr = nullptr;
     nv::ui::GridView::Callbacks gridCb;
@@ -91,7 +98,7 @@ int main(int argc, char** argv) {
     gridCb.editRequested = [&](std::string id) {
         if (winPtr != nullptr) winPtr->openEditDialog(id);
     };
-    auto* grid = new nv::ui::GridView(&factory, gridCb);
+    auto* grid = new nv::ui::GridView(&factory, gridCb, repaintClock);
 
     // ChannelListPanel callbacks
     nv::ui::ChannelListPanel::Callbacks panelCb;
@@ -174,33 +181,10 @@ int main(int argc, char** argv) {
     executor.post([&, autoConnect] { mgr.restore(autoConnect); });
 
     // --- 소크 통계 (60초마다 RSS + 표시 fps 기록 — 4컬럼) ---
-    QDir().mkpath(QStringLiteral("logs"));
-    QTimer statsTimer;
-    std::map<std::string, uint64_t> lastSeqs;
-    QObject::connect(&statsTimer, &QTimer::timeout, &win, [&factory, &lastSeqs] {
-        std::FILE* csv = std::fopen("logs/soak.csv", "a");
-        if (csv != nullptr) {
-            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::system_clock::now().time_since_epoch())
-                                .count();
-            double fpsTotal = 0.0;
-            int active = 0;
-            for (const auto& id : factory.slotIds()) {
-                if (auto* s = factory.slot(id)) {
-                    nv::infra::LatestFrameSlot::Frame f;
-                    uint64_t seq = lastSeqs[id];
-                    if (s->latest(f, seq)) seq = f.seq;
-                    const uint64_t prev = lastSeqs[id];
-                    if (seq > prev) { fpsTotal += (seq - prev) / 60.0; ++active; }
-                    lastSeqs[id] = seq;
-                }
-            }
-            std::fprintf(csv, "%lld,%.1f,%.1f,%d\n", static_cast<long long>(ms),
-                         nv::infra::processRssMb(), fpsTotal, active);
-            std::fclose(csv);
-        }
-    });
-    statsTimer.start(60'000);
+    const QString logsDir = cfgDir + QStringLiteral("/logs");
+    QDir().mkpath(logsDir);
+    nv::infra::SoakLogger soakLogger(factory, logsDir + QStringLiteral("/soak.csv"));
+    soakLogger.start(60'000);
 
     const int rc = QApplication::exec();
     // Fix 4: 명시적 teardown — 콜백 해제 → 채널 정리 → 큐 비움 (스택 수명 의존 제거)

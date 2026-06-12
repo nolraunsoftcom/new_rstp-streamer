@@ -5,11 +5,11 @@
 | # | 항목 | 내용 | 해소 시점 |
 |---|---|---|---|
 | 1 | ECONNREFUSED 진단 매핑 | connection refused는 호스트 생존+포트 다운인데 현재 DeviceUnreachable로 뭉뚱그림. 직결=streamer 다운 / relay=RelayDown으로 세분화 필요 | M4 (relay 통합) |
-| 2 | 프레임 경로 풀카피 4회 | sws→vector→slot→out→QImage. SW 경로에선 허용 범위 | M2 (HW 디코딩+GPU 렌더로 교체) |
+| 2 | 프레임 경로 풀카피 4회 | sws→vector→slot→out→QImage. SW 경로에선 허용 범위 | **부분 해소(M2b)**: HW 경로 GPU 서피스 직행으로 4→1회 감소. 단 동반-rgba(CPU 왕복) 미제거 — zero-copy는 #15로 이월 |
 | 3 | 통합 테스트 고정 sleep | 서버 1.5s/퍼블리셔 0.8s 대기 — 느린 CI에서 flaky 소지. 포트 폴링으로 전환 필요 | CI 도입 시 (M5) |
 | 4 | 해제 후 정지화면 잔류 | disconnect 후 LatestFrameSlot에 마지막 프레임이 남아 화면 유지. 상태 표시가 있어 오인 위험 낮음 | M2 (UI 개선) |
 | 5 | UI 채널 목록 3중 캐시 | MainWindow/GridView/ChannelListPanel 수동 동기화 | M3 (UI 모델 단일화) |
-| 6 | GridView→infra 직접 의존 | 슬롯 조회 포트 부재 (헥사고날 위반) | M2b (렌더 경로 개편 시) |
+| 6 | GridView→infra 직접 의존 | 슬롯 조회 포트 부재 (헥사고날 위반) | **해소(M2b)**: IFrameSurfaceRegistry 포트 도입, GridView가 포트에만 의존 |
 | 7 | nextGridIndex O(n²)·전량 재직렬화 | 20~32ch 무시 가능 | 채널 수 확장 시 |
 | 8 | 슬롯 레지스트리 무한 증가 | destroySource no-op + chN ID 미재사용 — 추가/삭제 반복 시 슬롯 누적 | M2b (IFrameSurfaceRegistry 포트화 시 수명 정리) |
 | 9 | soak.csv 무한 append·상대경로 | 회전/상한 없음 | M2b ride-along (SoakLogger 추출) |
@@ -20,6 +20,16 @@
 
 | # | 항목 | 내용 | 해소 |
 |---|---|---|---|
-| 12 | CompositeLogger::setCallback 스레드 안전성 | log()와 setCallback 간 미동기화 — 현재 teardown 순서(drain 후 호출)로 레이스 창 near-zero | M2b Task 3 (SoakLogger 작업 시 atomic 처리) |
-| 13 | GridView m_tiles QString 키 | relayout 핫패스에서 fromStdString 반복 — 32ch에서 무영향 | M2b Task 5 (렌더 개편 시 std::string 키로) |
+| 12 | CompositeLogger::setCallback 스레드 안전성 | log()와 setCallback 간 미동기화 — 현재 teardown 순서(drain 후 호출)로 레이스 창 near-zero | **해소(B3/M2b)**: SoakLogger 추출 시 atomic 처리 적용 확인 |
+| 13 | GridView m_tiles QString 키 | relayout 핫패스에서 fromStdString 반복 — 32ch에서 무영향 | **해소(B5/M2b)**: RhiVideoRenderer/SwVideoRenderer 도입 시 std::string 키로 전환 |
 | 14 | 상태→한글/색 매핑 중복 | GridView·ChannelListPanel 2곳 복제 | M2b ride-along (StatusDisplay 추출) |
+
+## M2b 실측 후 (2026-06-12)
+
+| # | 항목 | 내용 | 해소 |
+|---|---|---|---|
+| 15 | HW 디코드 GPU→CPU 왕복 | VideoToolbox 디코드 후 av_hwframe_transfer_data로 CPU 복사 + sws RGBA + 텍스처 재업로드(동반-rgba). 진짜 zero-copy(CVPixelBuffer→CVMetalTextureCache) 미적용 — 20ch CPU의 주 오버헤드 | M2b 후속 성능 작업 (가장 큰 CPU 레버) |
+| 16 | 32ch 성능 미측정 | 시뮬 32 퍼블리셔가 측정 머신 포화 — 별도 부하 발생원/세션 필요 | 후속 (분리 측정) |
+| 17 | GPU framePainted 가시성 의존 | RhiVideoRenderer.render()가 compositing 시에만 호출 → 오프스크린/최소화 창은 표시단계 미확정(구 SW paintEvent도 동일 특성, 회귀 아님) | M3 (필요 시 보정) |
+| 18 | 저장 실패 UI 미표시 | save 실패가 로그 한 줄뿐 — 상태바/다이얼로그 미반영 | M3 (UI 알림) |
+| 19 | placeholder 풀 미축소 | hide만, 최대 셀 수로 유한 | 경미, 보류 |
