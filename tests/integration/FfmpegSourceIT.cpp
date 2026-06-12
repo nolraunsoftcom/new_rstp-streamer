@@ -3,6 +3,7 @@
 // 준비: ops/mediamtx/download.sh && tests/fixtures/make-fixtures.sh
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
+#include <iterator>
 #include "harness.h"
 #include "src/infra/ffmpeg/FfmpegStreamSource.h"
 #include "src/infra/video/LatestFrameSlot.h"
@@ -111,4 +112,35 @@ TEST_CASE("IT: 도달 불가 서버 → 즉시 에러 (행 금지)") {
     src.open("rtsp://127.0.0.1:1/none", lsn);  // 닫힌 포트
     CHECK(lsn.waitFor("error:", 10s));          // DeviceUnreachable 또는 SessionRefused
     src.close();
+}
+
+TEST_CASE("IT: close()는 TEARDOWN을 송신한다 (유령 세션 방지)") {
+    if (!integrationEnabled()) SKIP("NV_MEDIAMTX_BIN 미설정");
+
+    constexpr int kGtPort = 18556;
+    std::string yml = "/tmp/nv_gt_mediamtx.yml";
+    { std::ofstream f(yml);
+      f << "logLevel: debug\nrtspAddress: :" << kGtPort << "\napi: no\nrtmp: no\nhls: no\nwebrtc: no\nsrt: no\npaths:\n  all_others:\n"; }
+    ChildProcess mtx(envOr("NV_MEDIAMTX_BIN", "") + " " + yml + " > /tmp/nv_gt_mtx.log 2>&1");
+    std::this_thread::sleep_for(700ms);
+
+    ChildProcess pub("ffmpeg -re -stream_loop -1 -i " + fixtureDir() + "/h264.mkv"
+                     " -c copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:" +
+                     std::to_string(kGtPort) + "/gtd >/dev/null 2>&1");
+    std::this_thread::sleep_for(800ms);
+
+    nv::infra::LatestFrameSlot slot;
+    nv::infra::FfmpegStreamSource src(slot);
+    WaitingListener lsn;
+    src.open("rtsp://127.0.0.1:" + std::to_string(kGtPort) + "/gtd", lsn);
+    REQUIRE(lsn.waitFor("decoded", 10s));
+    src.close();                                  // 스트리밍 중 종료 — TEARDOWN 나가야 함
+    std::this_thread::sleep_for(500ms);
+
+    std::ifstream log("/tmp/nv_gt_mtx.log");
+    std::string all((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    // MediaMTX는 정상 TEARDOWN 시 "torn down by" 포함 라인을 남긴다
+    const bool tornDown = all.find("torn down") != std::string::npos;
+    INFO(all.substr(all.size() > 4000 ? all.size() - 4000 : 0));
+    CHECK(tornDown);
 }

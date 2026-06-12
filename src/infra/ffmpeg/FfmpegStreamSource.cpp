@@ -57,7 +57,6 @@ void FfmpegStreamSource::open(const std::string& url, nv::app::StreamSourceListe
 }
 
 void FfmpegStreamSource::close() {
-    m_graceUntilMs = steadyNowMs() + 3000;   // TEARDOWN 송신 유예 3초 — join 전에 설정해야 타이밍 보장
     m_stop = true;                             // interrupt callback이 블로킹 호출을 깨운다
     if (m_thread.joinable()) m_thread.join();
 }
@@ -82,6 +81,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
     rc = avformat_find_stream_info(fmt, nullptr);
     if (rc < 0) {
         if (!m_stop) listener->onSourceError(DiagnosisReason::SessionRefused);
+        m_graceUntilMs = steadyNowMs() + 1000;   // 읽기 중단 후 TEARDOWN 송신 유예 (2단계)
         avformat_close_input(&fmt);
         return;
     }
@@ -90,6 +90,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
     const int vIdx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
     if (vIdx < 0 || codec == nullptr) {
         if (!m_stop) listener->onSourceError(DiagnosisReason::SessionRefused);
+        m_graceUntilMs = steadyNowMs() + 1000;   // 읽기 중단 후 TEARDOWN 송신 유예 (2단계)
         avformat_close_input(&fmt);
         return;
     }
@@ -99,6 +100,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
     if (avcodec_open2(dec, codec, nullptr) < 0) {
         if (!m_stop) listener->onSourceError(DiagnosisReason::DecodeError);
         avcodec_free_context(&dec);
+        m_graceUntilMs = steadyNowMs() + 1000;   // 읽기 중단 후 TEARDOWN 송신 유예 (2단계)
         avformat_close_input(&fmt);
         return;
     }
@@ -150,6 +152,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
     av_frame_free(&frm);
     av_packet_free(&pkt);
     avcodec_free_context(&dec);
+    m_graceUntilMs = steadyNowMs() + 1000;   // 읽기 중단 후 TEARDOWN 송신 유예 (2단계)
     avformat_close_input(&fmt);
 }
 
