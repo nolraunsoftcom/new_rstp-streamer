@@ -36,3 +36,42 @@ TEST_CASE("손상된 JSON → 빈 목록 + 크래시 없음") {
     nv::infra::JsonChannelRepository repo(p.toStdString());
     CHECK(repo.load().empty());
 }
+
+// ── P1 로드 필터 3분기 ─────────────────────────────────────────────────────
+
+TEST_CASE("비배열 루트 JSON → 빈 목록") {
+    QTemporaryDir dir;
+    const QString p = dir.path() + "/obj.json";
+    { QFile f(p); f.open(QIODevice::WriteOnly); f.write("{\"key\":1}"); }
+    nv::infra::JsonChannelRepository repo(p.toStdString());
+    CHECK(repo.load().empty());
+}
+
+TEST_CASE("빈 id 항목은 로드 결과에서 제외된다") {
+    QTemporaryDir dir;
+    const QString p = dir.path() + "/noid.json";
+    {
+        QFile f(p); f.open(QIODevice::WriteOnly);
+        f.write(R"([
+            {"id":"ch1","name":"good","url":"rtsp://a","gridIndex":0},
+            {"id":"","name":"bad","url":"rtsp://b","gridIndex":1}
+        ])");
+    }
+    nv::infra::JsonChannelRepository repo(p.toStdString());
+    auto out = repo.load();
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].id == "ch1");
+}
+
+TEST_CASE("gridIndex 누락 항목은 -1로 로드된다") {
+    QTemporaryDir dir;
+    const QString p = dir.path() + "/nogrid.json";
+    {
+        QFile f(p); f.open(QIODevice::WriteOnly);
+        f.write(R"([{"id":"ch1","name":"cam","url":"rtsp://x"}])");
+    }
+    nv::infra::JsonChannelRepository repo(p.toStdString());
+    auto out = repo.load();
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].gridIndex == -1);
+}

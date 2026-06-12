@@ -31,7 +31,7 @@ std::vector<ChannelConfig> JsonChannelRepository::load() {
     return out;
 }
 
-void JsonChannelRepository::save(const std::vector<ChannelConfig>& channels) {
+bool JsonChannelRepository::save(const std::vector<ChannelConfig>& channels) {
     QJsonArray arr;
     for (const auto& c : channels) {
         QJsonObject o;
@@ -42,9 +42,9 @@ void JsonChannelRepository::save(const std::vector<ChannelConfig>& channels) {
         arr.append(o);
     }
     QSaveFile f(QString::fromStdString(m_path));   // 원자적 쓰기
-    if (!f.open(QIODevice::WriteOnly)) return;
+    if (!f.open(QIODevice::WriteOnly)) return false;
     f.write(QJsonDocument(arr).toJson(QJsonDocument::Indented));
-    f.commit();
+    return f.commit();
 }
 
 } // namespace nv::infra

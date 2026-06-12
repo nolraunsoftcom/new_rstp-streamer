@@ -3,6 +3,7 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -65,7 +66,16 @@ ChannelListPanel::ChannelListPanel(Callbacks cb, QWidget* parent)
         auto* chosen = menu.exec(m_list->viewport()->mapToGlobal(pos));
         if (chosen == actEdit) m_cb.editRequested(id);
         else if (chosen == actRetry) m_cb.retryRequested(id);
-        else if (chosen == actRemove) m_cb.removeRequested(id);
+        else if (chosen == actRemove) {
+            // U1: 삭제 확인 다이얼로그
+            const QString chName = QString::fromStdString(
+                m_configs[static_cast<size_t>(row)].name);
+            const auto ans = QMessageBox::question(
+                this, QStringLiteral("채널 삭제"),
+                QStringLiteral("'%1' 채널을 삭제하시겠습니까?").arg(chName),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (ans == QMessageBox::Yes) m_cb.removeRequested(id);
+        }
     });
     bodyLayout->addWidget(m_list, 1);
 
@@ -84,8 +94,17 @@ ChannelListPanel::ChannelListPanel(Callbacks cb, QWidget* parent)
         auto* item = m_list->currentItem();
         if (!item) return;
         const int row = m_list->row(item);
-        if (row >= 0 && row < static_cast<int>(m_configs.size()))
-            m_cb.removeRequested(m_configs[static_cast<size_t>(row)].id);
+        if (row >= 0 && row < static_cast<int>(m_configs.size())) {
+            // U1: 삭제 확인 다이얼로그
+            const QString chName = QString::fromStdString(
+                m_configs[static_cast<size_t>(row)].name);
+            const auto ans = QMessageBox::question(
+                this, QStringLiteral("채널 삭제"),
+                QStringLiteral("'%1' 채널을 삭제하시겠습니까?").arg(chName),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (ans == QMessageBox::Yes)
+                m_cb.removeRequested(m_configs[static_cast<size_t>(row)].id);
+        }
     });
     footerLayout->addWidget(m_addBtn, 1);
     footerLayout->addWidget(m_removeBtn, 1);

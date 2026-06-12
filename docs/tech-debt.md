@@ -11,3 +11,7 @@
 | 5 | UI 채널 목록 3중 캐시 | MainWindow/GridView/ChannelListPanel 수동 동기화 | M3 (UI 모델 단일화) |
 | 6 | GridView→infra 직접 의존 | 슬롯 조회 포트 부재 (헥사고날 위반) | M2b (렌더 경로 개편 시) |
 | 7 | nextGridIndex O(n²)·전량 재직렬화 | 20~32ch 무시 가능 | 채널 수 확장 시 |
+| 8 | 슬롯 레지스트리 무한 증가 | destroySource no-op + chN ID 미재사용 — 추가/삭제 반복 시 슬롯 누적 | M2b (IFrameSurfaceRegistry 포트화 시 수명 정리) |
+| 9 | soak.csv 무한 append·상대경로 | 회전/상한 없음 | M2b ride-along (SoakLogger 추출) |
+| 10 | URL 평문 표시 | rtsp://user:pass@ 자격증명 화면 노출 | M2b ride-along (마스킹) |
+| 11 | 패널/컬럼 선택 미영속 | QSettings 저장 안 함 — 재시작 리셋 | M3 |

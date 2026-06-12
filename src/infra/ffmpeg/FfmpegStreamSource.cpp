@@ -67,6 +67,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
     fmt->interrupt_callback.opaque = this;
 
     AVDictionary* opts = nullptr;
+    av_dict_set(&opts, "protocol_whitelist", "rtsp,rtp,tcp,udp", 0);  // S1: 허용 프로토콜만 열거
     av_dict_set(&opts, "rtsp_transport", "tcp", 0);   // R4: 로컬 레그 TCP 강제
     av_dict_set(&opts, "timeout", "5000000", 0);      // 소켓 타임아웃 5s(us) — FFmpeg 5+
     av_dict_set(&opts, "stimeout", "5000000", 0);     // 구버전 옵션명 (무시돼도 무해)

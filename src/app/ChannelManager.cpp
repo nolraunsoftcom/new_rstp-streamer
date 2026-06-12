@@ -4,6 +4,11 @@
 
 namespace nv::app {
 
+// S2: rtsp:// 또는 rtsps:// 스킴만 허용
+static bool isValidRtspUrl(const std::string& url) {
+    return url.rfind("rtsp://", 0) == 0 || url.rfind("rtsps://", 0) == 0;
+}
+
 using nv::domain::ChannelConfig;
 
 ChannelManager::ChannelManager(IChannelRepository& repo, IChannelRuntimeFactory& factory,
@@ -63,6 +68,7 @@ int ChannelManager::nextIdNumber() const {
 }
 
 std::string ChannelManager::addChannel(std::string name, std::string url) {
+    if (!isValidRtspUrl(url)) return {};   // S2: 비 RTSP 스킴 거부
     if (channelCount() >= m_maxChannels) return {};
     ChannelConfig cfg;
     cfg.id = "ch" + std::to_string(nextIdNumber());
@@ -89,6 +95,7 @@ void ChannelManager::removeChannel(const std::string& id) {
 }
 
 void ChannelManager::updateChannel(const std::string& id, std::string name, std::string url) {
+    if (!isValidRtspUrl(url)) return;       // S2: 비 RTSP 스킴 거부
     auto it = m_entries.find(id);
     if (it == m_entries.end()) return;
     auto& e = it->second;
@@ -155,7 +162,10 @@ void ChannelManager::setSnapshotObserver(
 }
 
 void ChannelManager::persist() {
-    m_repo.save(configs());
+    if (!m_repo.save(configs())) {  // U3: 저장 실패 시 경고 로그
+        m_logger.log(LogLevel::Warn, "", "ChannelManager", "channel save failed",
+                     nv::domain::DiagnosisReason::DiskFull);
+    }
 }
 
 void ChannelManager::notifyList() {

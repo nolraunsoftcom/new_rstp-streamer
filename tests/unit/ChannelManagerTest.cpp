@@ -143,3 +143,76 @@ TEST_CASE("setSnapshotObserver: 채널ID와 함께 스냅샷이 전달된다") {
     REQUIRE_FALSE(seen.empty());
     CHECK(seen.back() == id);
 }
+
+// ── P1 신규 테스트 ─────────────────────────────────────────────────────────
+
+TEST_CASE("setSnapshotObserver를 채널 생성 후 호출하면 기존 채널에도 rebind된다") {
+    Fixture f;
+    const auto id1 = f.mgr.addChannel("a", "rtsp://a");
+    const auto id2 = f.mgr.addChannel("b", "rtsp://b");
+
+    std::vector<std::string> seen;
+    f.mgr.setSnapshotObserver([&](const std::string& id, const ChannelSnapshot&) {
+        seen.push_back(id);
+    });
+
+    f.mgr.connectAll();
+    // 두 채널 모두 connect → Connecting 스냅샷이 콜백에 등장해야 한다
+    CHECK(std::find(seen.begin(), seen.end(), id1) != seen.end());
+    CHECK(std::find(seen.begin(), seen.end(), id2) != seen.end());
+}
+
+TEST_CASE("setSnapshotObserver(nullptr) 후에는 콜백이 호출되지 않는다") {
+    Fixture f;
+    int count = 0;
+    f.mgr.setSnapshotObserver([&](const std::string&, const ChannelSnapshot&) { ++count; });
+    const auto id = f.mgr.addChannel("a", "rtsp://a");
+    f.mgr.connectAll();
+    const int countAfter = count;
+    REQUIRE(countAfter > 0);
+
+    f.mgr.setSnapshotObserver(nullptr);
+    // 상태 변화 유발: source가 열렸으므로 onSessionOpened 이벤트 주입
+    f.factory.registry.at(id)->listener()->onSessionOpened();
+    CHECK(count == countAfter);   // 옵저버 해제 후 카운트 불변
+}
+
+TEST_CASE("disconnectAll은 전 채널 소스를 닫는다(유령 방지 핵심)") {
+    Fixture f;
+    const auto id1 = f.mgr.addChannel("a", "rtsp://a");
+    const auto id2 = f.mgr.addChannel("b", "rtsp://b");
+    const auto id3 = f.mgr.addChannel("c", "rtsp://c");
+    f.mgr.connectAll();
+    REQUIRE(f.factory.registry.at(id1)->openCount >= 1);
+
+    f.mgr.disconnectAll();
+    CHECK(f.factory.registry.at(id1)->closeCount >= 1);
+    CHECK(f.factory.registry.at(id2)->closeCount >= 1);
+    CHECK(f.factory.registry.at(id3)->closeCount >= 1);
+    CHECK(f.mgr.controller(id1)->state() == ConnState::Idle);
+    CHECK(f.mgr.controller(id2)->state() == ConnState::Idle);
+    CHECK(f.mgr.controller(id3)->state() == ConnState::Idle);
+}
+
+TEST_CASE("setListChangedObserver(nullptr) 후 add/remove가 통지 안 함") {
+    Fixture f;
+    int count = 0;
+    f.mgr.setListChangedObserver([&] { ++count; });
+    const auto id = f.mgr.addChannel("a", "rtsp://a");
+    REQUIRE(count == 1);
+
+    f.mgr.setListChangedObserver(nullptr);
+    f.mgr.addChannel("b", "rtsp://b");
+    f.mgr.removeChannel(id);
+    CHECK(count == 1);   // nullptr 설정 후 통지 없음
+}
+
+TEST_CASE("addChannel: rtsp 아닌 스킴(file://, http://)은 거부") {
+    Fixture f;
+    CHECK(f.mgr.addChannel("a", "file:///etc/passwd").empty());
+    CHECK(f.mgr.addChannel("b", "http://example.com/stream").empty());
+    CHECK(f.mgr.channelCount() == 0);
+    // rtsp:// 는 허용
+    CHECK_FALSE(f.mgr.addChannel("c", "rtsp://cam1").empty());
+    CHECK(f.mgr.channelCount() == 1);
+}

@@ -6,9 +6,10 @@ namespace nv::test {
 class FakeChannelRepository final : public nv::app::IChannelRepository {
 public:
     std::vector<nv::domain::ChannelConfig> load() override { ++loadCount; return stored; }
-    void save(const std::vector<nv::domain::ChannelConfig>& channels) override {
+    bool save(const std::vector<nv::domain::ChannelConfig>& channels) override {
         ++saveCount;
         stored = channels;
+        return true;
     }
     std::vector<nv::domain::ChannelConfig> stored;
     int loadCount = 0;

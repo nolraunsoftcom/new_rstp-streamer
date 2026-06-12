@@ -9,7 +9,7 @@ class JsonChannelRepository final : public nv::app::IChannelRepository {
 public:
     explicit JsonChannelRepository(std::string filePath);
     std::vector<nv::domain::ChannelConfig> load() override;
-    void save(const std::vector<nv::domain::ChannelConfig>& channels) override;
+    bool save(const std::vector<nv::domain::ChannelConfig>& channels) override;
 
 private:
     std::string m_path;

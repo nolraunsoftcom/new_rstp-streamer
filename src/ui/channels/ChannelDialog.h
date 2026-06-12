@@ -12,6 +12,9 @@ public:
     QString name() const;
     QString url() const;
 
+protected:
+    void accept() override;   // U2: 빈 이름·비 RTSP URL 거부
+
 private:
     QLineEdit* m_name = nullptr;
     QLineEdit* m_url = nullptr;

@@ -4,6 +4,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -71,6 +72,7 @@ struct GridView::Tile : public QWidget {
         infoBar->setFixedHeight(kInfoBarHeight);
 
         nameLabel = new QLabel(name, infoBar);
+        nameLabel->setTextFormat(Qt::PlainText);   // S3: 채널명 HTML 인젝션 방지
         nameLabel->setStyleSheet(
             QStringLiteral("color:#222; font-size:11px; font-weight:bold;"));
 
@@ -354,7 +356,14 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
                 auto* chosen    = menu.exec(tile->mapToGlobal(p));
                 if (chosen == actEdit)        m_cb.editRequested(tile->channelId);
                 else if (chosen == actRetry)  m_cb.retryRequested(tile->channelId);
-                else if (chosen == actRemove) m_cb.removeRequested(tile->channelId);
+                else if (chosen == actRemove) {
+                    // U1: 삭제 확인 다이얼로그
+                    const auto ans = QMessageBox::question(
+                        tile, QStringLiteral("채널 삭제"),
+                        QStringLiteral("'%1' 채널을 삭제하시겠습니까?").arg(tile->name),
+                        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                    if (ans == QMessageBox::Yes) m_cb.removeRequested(tile->channelId);
+                }
                 else if (chosen != nullptr && !chosen->data().isNull())
                     m_cb.swapRequested(tile->channelId,
                                        chosen->data().toString().toStdString());
