@@ -32,6 +32,7 @@ add_library(nv_infra STATIC
   infra/system/ControlExecutor.cpp
   infra/system/SoakLogger.cpp
   infra/ffmpeg/FfmpegStreamSource.cpp
+  infra/ffmpeg/FfmpegRecorder.cpp
   infra/ffmpeg/HwContext.cpp
   infra/ffmpeg/ChannelSourceFactory.cpp
   infra/persist/JsonChannelRepository.cpp
