@@ -32,7 +32,7 @@
 | 15 | HW 디코드 GPU→CPU 왕복 | VideoToolbox 디코드 후 av_hwframe_transfer_data로 CPU 복사 + sws RGBA + 텍스처 재업로드(동반-rgba). 진짜 zero-copy(CVPixelBuffer→CVMetalTextureCache) 미적용 — 20ch CPU의 주 오버헤드 | M2b 후속 성능 작업 (가장 큰 CPU 레버) |
 | 16 | 32ch 성능 미측정 | 시뮬 32 퍼블리셔가 측정 머신 포화 — 별도 부하 발생원/세션 필요 | 후속 (분리 측정) |
 | 17 | GPU framePainted 가시성 의존 | RhiVideoRenderer.render()가 compositing 시에만 호출 → 오프스크린/최소화 창은 표시단계 미확정(구 SW paintEvent도 동일 특성, 회귀 아님) | M3 (필요 시 보정) |
-| 18 | 저장 실패 UI 미표시 | save 실패가 로그 한 줄뿐 — 상태바/다이얼로그 미반영 | M3 (UI 알림) |
+| 18 | 저장 실패 UI 미표시 | save 실패가 로그 한 줄뿐 — 상태바/다이얼로그 미반영 | **부분(M3)**: 녹화 시작 실패는 `RecordingController`가 Idle 유지 + Warn 로그 + 옵저버로 UI에 비-녹화 상태 통지(● 버튼 빨강 미점등으로 시작 실패 가시화). 단 채널 설정 save 실패(`ChannelManager::persist`)·녹화 시작 실패의 **명시적 토스트/상태바 알림**은 미구현 — M4 UI 알림으로 이월 |
 | 19 | placeholder 풀 미축소 | hide만, 최대 셀 수로 유한 | 경미, 보류 |
 | 20 | 렌더러 RHI 프로브 미캐시 | selectRendererKind(true) 하드코딩, 타일별 폴백·미전역캐시 | zero-copy 묶음 |
 | 21 | present() 중복 + 프레임당 2번째 QImage 카피 | Rhi/Sw 8줄 복제, 초당 600 카피 | zero-copy 묶음 |
@@ -54,4 +54,12 @@
 |---|---|---|---|
 | 24 | 순차 다채널 종료 누적 지연 | close() 타임드 join 상한 5s → 20채널 순차 종료 시 최대 ~20s 소요. 병렬 disconnect는 teardown 순서 민감 — 보류. 실장비 wedge 발생 시 개선 우선순위 재검토 | 보류 (M3 이후) |
 
-남은 부채: #12(CompositeLogger, 해소됨/B3), #13(QString키, 해소됨/B5), #16(32ch 측정), #17(GPU 가시성 의존), #18(저장실패 UI), #19(placeholder 풀), #24(순차 종료 누적 지연), Windows D3D11 zero-copy(별도).
+남은 부채: #12(CompositeLogger, 해소됨/B3), #13(QString키, 해소됨/B5), #16(32ch 측정), #17(GPU 가시성 의존), #18(저장실패 UI — M3 부분 해소, 명시 알림 M4 이월), #19(placeholder 풀), #24(순차 종료 누적 지연), Windows D3D11 zero-copy(별도).
+
+## M3 (2026-06-13, 녹화/스냅샷)
+
+| # | 항목 | 내용 | 해소 시점 |
+|---|---|---|---|
+| 25 | 녹화 시작 실패 명시 알림 | 시작 실패가 Warn 로그 + ●버튼 미점등뿐 — 토스트/상태바 명시 알림 미구현(#18과 묶임) | M4 (UI 알림) |
+| 26 | 통합테스트 픽스처 GOP 의존 | 픽스처를 1초 키프레임으로 안정화(중간 합류 flaky 제거) — 단, 통합테스트가 여전히 고정 sleep 사용(#3)이라 매우 느린 CI에선 잔여 flaky 소지 | CI 도입 시(#3과 묶음) |
+| 27 | 주기 롤오버(maxDuration) tick 미배선 | `RecordingController::tick`(10분 세그먼트 롤오버)이 main 루프에 미배선 — onReconnect 분리만 배선됨. 장시간 단일 세그먼트가 커질 수 있음 | M4 (장시간 녹화 운영) |
