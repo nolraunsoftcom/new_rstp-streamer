@@ -36,3 +36,15 @@
 | 20 | 렌더러 RHI 프로브 미캐시 | selectRendererKind(true) 하드코딩, 타일별 폴백·미전역캐시 | zero-copy 묶음 |
 | 21 | present() 중복 + 프레임당 2번째 QImage 카피 | Rhi/Sw 8줄 복제, 초당 600 카피 | zero-copy 묶음 |
 | 22 | HW transfer 실패 시 슬롯 직전 핸들 잔존 | seq 가드로 무해, 불변량 흐림 | zero-copy 묶음 |
+
+## M2c 해소 (2026-06-13, zero-copy)
+
+| # | 항목 | 상태 |
+|---|---|---|
+| 6 | GridView→infra 직접 의존 | **해소** — UI가 IFrameSurfaceRegistry 포트로 전환(C1), GridView의 ChannelSourceFactory include 0 |
+| 9/21 | present() 중복 + 프레임당 2번째 QImage 카피 | **해소** — 공통부 추출, zero-copy 경로는 GPU 직행(카피 없음), RGBA 카피는 SW 폴백만 |
+| 10/22 | HW transfer 실패 시 슬롯 핸들 잔존 | **해소/무해확인**(C4) — 불변량 주석 명시, seq 가드로 소비 차단 |
+| 15 | HW 디코드 GPU→CPU 왕복 | **해소** — NV12 CVPixelBuffer→Metal createFrom 직행(C2/C3), 20ch CPU 131%→92.6% |
+| 20 | 렌더러 RHI 프로브 미캐시 | **해소**(C4) — 1회 프로브 정적 캐시, 타일별 폴백 폭풍 방지 |
+
+남은 부채: #12(CompositeLogger, 해소됨/B3), #13(QString키, 해소됨/B5), #16(32ch 측정), #17(GPU 가시성 의존), #18(저장실패 UI), #19(placeholder 풀), Windows D3D11 zero-copy(별도).
