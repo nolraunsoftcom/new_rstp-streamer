@@ -114,17 +114,25 @@ void RecordingController::doStop(const std::string& channelId) {
 
 void RecordingController::toggle(const std::string& channelId,
                                  const std::string& channelName) {
-    const auto state = stateOf(channelId);
-    if (state == nv::domain::RecordingState::Idle) {
-        doStart(channelId, channelName);
-    } else {
+    auto it = m_channels.find(channelId);
+    const bool active = (it != m_channels.end()) &&
+        (it->second.armed ||
+         it->second.state == nv::domain::RecordingState::Recording);
+    if (active) {
+        // 녹화 의도 해제 + 현재 세그먼트 종료
+        m_channels[channelId].armed = false;
         doStop(channelId);
+    } else {
+        // 녹화 의도 설정 + 첫 세그먼트 즉시 시작(즉각적 시작감)
+        m_channels[channelId].armed = true;
+        doStart(channelId, channelName);
     }
 }
 
 void RecordingController::onChannelRemoved(const std::string& channelId) {
     auto it = m_channels.find(channelId);
     if (it == m_channels.end()) return;
+    it->second.armed = false;
     if (it->second.state == nv::domain::RecordingState::Recording) {
         // best-effort: 소스가 곧 파괴되므로 실패 가능, 유령 상태 방지가 핵심
         m_sink.stopRecording(channelId);
@@ -134,15 +142,26 @@ void RecordingController::onChannelRemoved(const std::string& channelId) {
 }
 
 void RecordingController::onReconnect(const std::string& channelId,
-                                      const std::string& channelName) {
+                                      const std::string& /*channelName*/) {
     if (!m_policy.splitOnReconnect) return;
     auto it = m_channels.find(channelId);
-    if (it == m_channels.end() ||
+    if (it == m_channels.end() || !it->second.armed ||
         it->second.state != nv::domain::RecordingState::Recording) return;
 
-    // 현재 세그먼트 중지 후 새 세그먼트 시작
-    m_sink.stopRecording(channelId);
-    it->second.state = nv::domain::RecordingState::Idle;  // 임시 — doStart가 Recording으로 전환
+    // 드롭 엣지: 죽어가는 소스에 doStart 하지 않는다. 현재 세그먼트만 종료하고
+    // armed는 유지 — 복구(onStreaming) 시 새 세그먼트가 시작된다.
+    doStop(channelId);
+}
+
+void RecordingController::onStreaming(const std::string& channelId,
+                                      const std::string& channelName) {
+    auto it = m_channels.find(channelId);
+    // armed가 아니면(사용자가 녹화 의도 없음) 무동작
+    if (it == m_channels.end() || !it->second.armed) return;
+    // 이미 녹화 중이면 중복 시작 방지
+    if (it->second.state == nv::domain::RecordingState::Recording) return;
+
+    // armed인데 미녹화(드롭으로 종료됐거나 수렴으로 떨어짐) → 새 세그먼트 시작
     doStart(channelId, channelName);
 }
 
@@ -168,6 +187,7 @@ void RecordingController::tick() {
             m_logger.log(LogLevel::Warn, id, "RecordingController",
                          "녹화 중이라 표시됐으나 sink는 비녹화 — Idle로 수렴(REC 해제)");
             ch.state = nv::domain::RecordingState::Idle;
+            // armed는 유지: 진짜 복구(onStreaming) 시 다음 세그먼트를 재시도한다.
             notify(id, nv::domain::RecordingState::Idle);
             continue;
         }

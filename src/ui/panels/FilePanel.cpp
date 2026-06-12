@@ -155,13 +155,25 @@ QIcon FilePanel::thumbnailFor(const QString& absPath, qint64 mtimeEpoch)
     const auto it = m_thumbCache.constFind(key);
     if (it != m_thumbCache.constEnd()) return it.value();
 
+    QIcon icon;
+
+    // 스냅샷이 쓰는 중이거나 0바이트인 PNG를 읽으면 "libpng error: Read Error" 스팸이
+    // 발생한다. 디코드 전에 유효성을 확인한다: 0바이트/존재하지 않으면 스킵, QImageReader가
+    // 헤더만으로 읽을 수 없다고 판단하면(canRead()==false) 스킵. 둘 다 폴백 아이콘 사용.
+    const QFileInfo fi(absPath);
+    if (!fi.exists() || fi.size() == 0) {
+        return icon;   // 캐시하지 않음 — 완성되면 mtime 변경으로 재시도
+    }
+
     // 축소 디코드: 원본을 풀 디코드하지 않고 썸네일 크기로 직접 디코드한다(메모리/시간 절약).
     QImageReader reader(absPath);
+    if (!reader.canRead()) {
+        return icon;   // 쓰는 중/손상 — 폴백 아이콘, 캐시 안 함
+    }
     reader.setScaledSize(QSize(kThumbSize, kThumbSize));
     reader.setAutoTransform(true);
     const QImage img = reader.read();
 
-    QIcon icon;
     if (!img.isNull()) {
         icon = QIcon(QPixmap::fromImage(img));
         m_thumbCache.insert(key, icon);   // 성공한 썸네일만 캐시(실패는 폴백 아이콘 사용)

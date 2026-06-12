@@ -92,32 +92,62 @@ TEST_CASE("toggle: 두 채널이 독립적으로 녹화 상태를 갖는다") {
     CHECK(f.ctrl.stateOf("ch2") == RecordingState::Recording);
 }
 
-// ── onReconnect: 녹화 중 세그먼트 분리 ──────────────────────────────────────
+// ── onReconnect(드롭) + onStreaming(복구): 녹화 생존 ────────────────────────
 
-TEST_CASE("onReconnect: 녹화 중인 채널은 stop+start 2회 호출(세그먼트 분리)") {
+TEST_CASE("생존: armed 채널의 드롭(onReconnect)은 세그먼트만 종료(Idle)+armed 유지, 복구(onStreaming)는 새 세그먼트") {
     Fixture f;
-    f.ctrl.toggle("ch1", "Cam1");   // start → startCount=1
+    f.ctrl.toggle("ch1", "Cam1");   // armed + start → startCount=1
     REQUIRE(f.ctrl.stateOf("ch1") == RecordingState::Recording);
 
+    // 드롭 엣지: 죽어가는 소스에 start 안 함 — 현재 세그먼트만 종료
     f.ctrl.onReconnect("ch1", "Cam1");
-
-    // stop 1회 + start 1회(새 세그먼트) → stopCount=1, startCount=2
     CHECK(f.sink.stopCount  == 1);
-    CHECK(f.sink.startCount == 2);
+    CHECK(f.sink.startCount == 1);   // 새 start 없음
+    CHECK(f.ctrl.stateOf("ch1") == RecordingState::Idle);
+
+    // 복구 엣지: armed && Idle → 새 세그먼트 시작(두 번째 세그먼트)
+    f.ctrl.onStreaming("ch1", "Cam1");
+    CHECK(f.sink.startCount == 2);   // 두 세그먼트(doStart 2회)
     CHECK(f.ctrl.stateOf("ch1") == RecordingState::Recording);
 }
 
-TEST_CASE("onReconnect: 녹화 중이지 않은 채널은 아무 동작 안 함") {
+TEST_CASE("생존: toggle stop 후 armed=false — 이후 onStreaming 무동작") {
     Fixture f;
-    f.ctrl.toggle("ch2", "Cam2");   // ch2만 시작
+    f.ctrl.toggle("ch1", "Cam1");   // start
+    REQUIRE(f.ctrl.stateOf("ch1") == RecordingState::Recording);
 
-    f.ctrl.onReconnect("ch1", "Cam1");  // ch1은 Idle — 무동작
+    f.ctrl.toggle("ch1", "Cam1");   // stop → armed=false
+    REQUIRE(f.ctrl.stateOf("ch1") == RecordingState::Idle);
+    CHECK(f.sink.startCount == 1);
+
+    f.ctrl.onStreaming("ch1", "Cam1");   // 의도 없음 → 무동작
+    CHECK(f.sink.startCount == 1);
+    CHECK(f.ctrl.stateOf("ch1") == RecordingState::Idle);
+}
+
+TEST_CASE("생존: 이미 Recording 중 onStreaming은 중복 시작하지 않는다") {
+    Fixture f;
+    f.ctrl.toggle("ch1", "Cam1");
+    REQUIRE(f.ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    f.ctrl.onStreaming("ch1", "Cam1");   // 이미 녹화 중 — 무동작
+    CHECK(f.sink.startCount == 1);
+    CHECK(f.ctrl.stateOf("ch1") == RecordingState::Recording);
+}
+
+TEST_CASE("생존: armed가 아닌 채널은 onReconnect/onStreaming 무동작") {
+    Fixture f;
+    f.ctrl.toggle("ch2", "Cam2");   // ch2만 armed
+
+    f.ctrl.onReconnect("ch1", "Cam1");   // ch1은 비armed — 무동작
+    f.ctrl.onStreaming("ch1", "Cam1");   // 비armed — 무동작
 
     CHECK(f.sink.stopCount  == 0);
     CHECK(f.sink.startCount == 1);   // ch2 start만
+    CHECK(f.ctrl.stateOf("ch1") == RecordingState::Idle);
 }
 
-TEST_CASE("onReconnect: splitOnReconnect=false이면 아무 동작 안 함") {
+TEST_CASE("생존: splitOnReconnect=false이면 onReconnect 무동작(녹화 유지)") {
     FakeClock clock;
     FakeRecordingSink sink;
     FakeLogger logger;
@@ -127,10 +157,11 @@ TEST_CASE("onReconnect: splitOnReconnect=false이면 아무 동작 안 함") {
     ctrl.toggle("ch1", "Cam1");
     REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
 
-    ctrl.onReconnect("ch1", "Cam1");
+    ctrl.onReconnect("ch1", "Cam1");   // split 비활성 — 종료 안 함
 
     CHECK(sink.stopCount == 0);
     CHECK(sink.startCount == 1);   // 최초 start만
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Recording);
 }
 
 // ── tick: maxDuration 초과 롤오버 ───────────────────────────────────────────
@@ -365,6 +396,30 @@ TEST_CASE("D3 수렴: Recording인데 sink가 비녹화면 유예 후 tick에서
     const bool hasWarn = std::any_of(logger.entries.begin(), logger.entries.end(),
         [](const auto& e){ return e.level == nv::app::LogLevel::Warn; });
     CHECK(hasWarn);
+}
+
+TEST_CASE("생존: reconciliation 발동 후에도 armed 유지 → onStreaming 재시도") {
+    FakeClock clock;
+    FlakyRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{600}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    sink.forceNotRecording = true;     // 디코드 스레드 start 실패 모사(래치만 올라감)
+    ctrl.toggle("ch1", "Cam1");        // armed + Recording(래치)
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+    REQUIRE(sink.startCount == 1);
+
+    // 유예 후 tick — Idle로 수렴(하지만 armed는 유지)
+    clock.advance(std::chrono::seconds{4});
+    ctrl.tick();
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Idle);
+
+    // 진짜 복구: 이번엔 정상 녹화 → onStreaming이 재시도해 새 세그먼트 시작
+    sink.forceNotRecording = false;
+    ctrl.onStreaming("ch1", "Cam1");
+    CHECK(sink.startCount == 2);       // armed 유지 덕분에 재시도됨
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Recording);
 }
 
 TEST_CASE("D3 수렴: sink가 정상 녹화 중이면 tick에서 수렴하지 않는다") {

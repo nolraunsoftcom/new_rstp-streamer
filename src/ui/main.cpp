@@ -216,13 +216,14 @@ int main(int argc, char** argv) {
                                   Q_ARG(QVector<bool>, ac));
     };
 
-    // M3-6: onReconnect 세그먼트 배선 — 채널이 재연결(끊김→재open)에 진입하면
-    // 녹화 중인 채널의 세그먼트를 분리한다. 스냅샷 옵저버는 control 스레드에서
-    // 호출되므로(ChannelController가 같은 스레드에서 발행) recCtrl 호출도 control
-    // 스레드에서 직렬화돼 안전하다. 직전 상태를 채널별로 기억해 "정상 스트림→끊김"
-    // 전이 경계(Reconnecting/Stalled 진입)에서 한 번만 분리한다.
-    // recCtrl.onReconnect는 내부에서 녹화 중(splitOnReconnect && Recording)만 동작하므로
-    // 비녹화 채널은 무영향. 새 세그먼트는 새 파일 경로로 시작돼 직전 세그먼트를 덮어쓰지 않는다.
+    // M3-6: 녹화 생존 배선 — 채널 상태 전이 경계에서 RecordingController를 구동한다.
+    // 드롭 엣지(정상→Reconnecting/Stalled 진입): onReconnect — 죽어가는 소스에 start하지
+    //   않고 현재 세그먼트만 종료(armed 유지).
+    // 복구 엣지(Streaming 재도달): onStreaming — armed 채널의 새 세그먼트를 시작.
+    // 스냅샷 옵저버는 control 스레드에서 호출되므로(ChannelController가 같은 스레드에서
+    // 발행) recCtrl 호출도 control 스레드에서 직렬화돼 안전하다. 직전 상태를 채널별로
+    // 기억해 전이 경계에서 한 번씩만 동작한다. 비녹화/비armed 채널은 내부에서 무영향.
+    // 새 세그먼트는 새 파일 경로로 시작돼 직전 세그먼트를 덮어쓰지 않는다.
     auto prevState = std::make_shared<std::map<std::string, nv::domain::ConnState>>();
 
     // Fix 3: 옵저버 설정은 control 스레드(executor)에서만 — executor.post로 진입
@@ -241,12 +242,22 @@ int main(int argc, char** argv) {
                  cur == nv::domain::ConnState::Stalled) &&
                 prev != nv::domain::ConnState::Reconnecting &&
                 prev != nv::domain::ConnState::Stalled;
-            if (enteringReconnect) {
+            // 복구 엣지: Streaming 재도달(prev != Streaming && cur == Streaming).
+            // 끊김 후 복구마다 armed 채널의 새 세그먼트를 시작한다.
+            const bool enteringStreaming =
+                cur == nv::domain::ConnState::Streaming &&
+                prev != nv::domain::ConnState::Streaming;
+            if (enteringReconnect || enteringStreaming) {
                 std::string name;
                 for (const auto& c : mgr.configs()) {
                     if (c.id == id) { name = c.name; break; }
                 }
-                recCtrl.onReconnect(id, name);   // 녹화 중인 채널만 내부에서 분리
+                if (enteringReconnect) {
+                    recCtrl.onReconnect(id, name);   // 드롭 엣지: 현재 세그먼트만 종료
+                }
+                if (enteringStreaming) {
+                    recCtrl.onStreaming(id, name);   // 복구 엣지: 새 세그먼트 시작
+                }
             }
             prev = cur;
             bridge.publish(QString::fromStdString(id), s);

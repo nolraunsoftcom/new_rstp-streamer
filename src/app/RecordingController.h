@@ -24,13 +24,18 @@ public:
                         ILogger& logger,
                         nv::domain::SegmentPolicy policy = {});
 
-    // 토글: Idle이면 녹화 시작, Recording/Stopping이면 녹화 중지.
+    // 토글: Idle이면 녹화 시작(armed=true), Recording/armed이면 녹화 중지(armed=false).
     // channelName은 파일명에 사용된다(채널 표시명).
     void toggle(const std::string& channelId, const std::string& channelName);
 
-    // 재연결 알림: 녹화 중이던 채널이면 현재 세그먼트를 중지하고 새 세그먼트를 시작.
-    // (분리 정책 splitOnReconnect가 false면 아무 동작 안 함.)
+    // 재연결(드롭 엣지) 알림: 소스가 곧 close되는 시점이므로 새 세그먼트를 시작하지 않는다.
+    // armed && Recording이면 현재 세그먼트만 종료(doStop → Idle)하되 armed는 유지한다.
+    // 복구 시 onStreaming이 새 세그먼트를 시작한다. (splitOnReconnect=false면 무동작.)
     void onReconnect(const std::string& channelId, const std::string& channelName);
+
+    // 복구(Streaming 재도달) 알림: armed && Idle이면 새 세그먼트를 시작(doStart).
+    // 이미 Recording이면 무동작(중복 방지). 끊김→복구마다 녹화를 지속시킨다.
+    void onStreaming(const std::string& channelId, const std::string& channelName);
 
     // 채널 삭제 알림: 녹화 중이면 내부 상태를 Idle로 정리해 유령 Recording 방지.
     // sink.stopRecording은 best-effort(소스가 곧 파괴됨). m_channels에서 항목 제거.
@@ -47,6 +52,7 @@ public:
 private:
     struct ChannelRec {
         nv::domain::RecordingState state{nv::domain::RecordingState::Idle};
+        bool armed{false};                                  // 사용자 녹화 의도(끊김에도 유지)
         std::string channelName;                            // 롤오버 시 재사용
         std::chrono::steady_clock::time_point segmentStart; // 현재 세그먼트 시작 시각
     };
