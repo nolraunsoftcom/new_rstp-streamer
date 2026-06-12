@@ -34,6 +34,7 @@ protected:
     void resizeEvent(QResizeEvent* ev) override;
 
 private:
+    // Rebuilds with stored configs/manualColumns; resize guard skips if layout unchanged.
     void relayout();
 
     nv::infra::ChannelSourceFactory* m_slots = nullptr;
@@ -42,7 +43,13 @@ private:
     struct Tile;
     std::map<QString, Tile*> m_tiles;             // channelId → tile
     std::vector<nv::domain::ChannelConfig> m_lastConfigs;
-    int m_cols = 1;  // current effective column count
+    int m_lastManualColumns = 0;
+
+    // Resize guard: cached layout parameters
+    int m_cachedCols     = 0;
+    int m_cachedRows     = 0;
+    int m_cachedCellW    = 0;
+    int m_cachedCellH    = 0;
 };
 
 } // namespace nv::ui

@@ -26,13 +26,13 @@ static const QString kToolButton = QStringLiteral(
 
 // ── 상태 → 표시 문구 (레거시 VlcWidget::statusText()) + 색 ──────────────
 static QString statusTextFor(const QString& state) {
-    if (state == QStringLiteral("Streaming"))   return QStringLiteral("연결됨");
-    if (state == QStringLiteral("Connecting"))  return QStringLiteral("연결 중");
-    if (state == QStringLiteral("SessionOpen")) return QStringLiteral("연결 중");
-    if (state == QStringLiteral("Reconnecting"))return QStringLiteral("재접속 중");
-    if (state == QStringLiteral("Stalled"))     return QStringLiteral("재접속 중");
-    if (state == QStringLiteral("Failed"))      return QStringLiteral("실패");
-    if (state == QStringLiteral("Idle"))        return QStringLiteral("대기");
+    if (state == QStringLiteral("Streaming"))    return QStringLiteral("연결됨");
+    if (state == QStringLiteral("Connecting"))   return QStringLiteral("연결 중");
+    if (state == QStringLiteral("SessionOpen"))  return QStringLiteral("연결 중");
+    if (state == QStringLiteral("Reconnecting")) return QStringLiteral("재접속 중");
+    if (state == QStringLiteral("Stalled"))      return QStringLiteral("재접속 중");
+    if (state == QStringLiteral("Failed"))       return QStringLiteral("실패");
+    if (state == QStringLiteral("Idle"))         return QStringLiteral("대기");
     return state;
 }
 
@@ -119,45 +119,44 @@ GridView::GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb, 
     m_grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
 }
 
-// ── 셀 크기 재계산 + 모든 셀에 setFixedSize 적용 (레거시 1959~1960행) ───
+// ── 레거시 채움 알고리즘 (MainWindow.cpp 2333~2345 직접 이식) ─────────────
+// rebuild()와 resizeEvent() 양쪽에서 호출. 계산된 레이아웃이 직전과 동일하면 스킵.
 void GridView::relayout()
 {
-    if (m_cols < 1) return;
+    const auto& configs       = m_lastConfigs;
+    const int   manualColumns = m_lastManualColumns;
 
-    const int w        = width();
-    const int cellW    = qMax(1, (w - (m_cols - 1) * kGridSpacing) / m_cols);
-    const int cellH    = cellW * 3 / 4 + kInfoBarHeight;
-    const QSize cs(cellW, cellH);
+    const int n = static_cast<int>(configs.size());
 
-    // 타일 셀
-    for (auto& [id, tile] : m_tiles) {
-        if (tile) tile->setFixedSize(cs);
+    // cols
+    const int cols = manualColumns > 0 ? manualColumns : nv::domain::grid::autoColumns(n);
+
+    // maxGridIndex: configs의 gridIndex 최댓값 (없으면 -1)
+    int maxGridIndex = -1;
+    for (const auto& cfg : configs) {
+        if (cfg.gridIndex > maxGridIndex) maxGridIndex = cfg.gridIndex;
     }
 
-    // 빈 셀 — QLabel (objectName "emptyCell")
-    const int total = m_grid->count();
-    for (int i = 0; i < total; ++i) {
-        auto* item = m_grid->itemAt(i);
-        if (!item) continue;
-        auto* w = item->widget();
-        if (w && !dynamic_cast<Tile*>(w)) {
-            w->setFixedSize(cs);
-        }
+    // 셀 크기
+    const int w       = width();
+    const int cellW   = qMax(1, (w - (cols - 1) * kGridSpacing) / cols);
+    const int cellH   = cellW * 3 / 4 + kInfoBarHeight;
+
+    // 행 수 (레거시 공식)
+    const int requiredRows    = qMax(1, (maxGridIndex + cols) / cols);
+    const int rowsForViewport = qMax(1, (height() + kGridSpacing + cellH) / (cellH + kGridSpacing));
+    const int rows            = qMax(requiredRows, rowsForViewport);
+    const int totalCells      = rows * cols;
+
+    // ── 리사이즈 가드: 모든 파라미터가 동일하면 재구성 불필요 ────────────
+    if (cols  == m_cachedCols  &&
+        rows  == m_cachedRows  &&
+        cellW == m_cachedCellW &&
+        cellH == m_cachedCellH) {
+        return;
     }
-}
 
-void GridView::resizeEvent(QResizeEvent* ev)
-{
-    QWidget::resizeEvent(ev);
-    relayout();
-}
-
-void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
-                       int manualColumns)
-{
-    m_lastConfigs = configs;
-
-    // 전체 철거
+    // ── 전체 철거 ────────────────────────────────────────────────────────
     while (auto* item = m_grid->takeAt(0)) {
         delete item->widget();
         delete item;
@@ -170,31 +169,51 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
     for (int r = 0; r < prevRows; ++r) m_grid->setRowStretch(r, 0);
     for (int c = 0; c < prevCols; ++c) m_grid->setColumnStretch(c, 0);
 
-    const int n    = static_cast<int>(configs.size());
-    const int cols = manualColumns > 0 ? manualColumns : nv::domain::grid::autoColumns(n);
-    const int rows = nv::domain::grid::rowsFor(n, cols);
+    // ── occupied 맵 구성: gridIndex → config ─────────────────────────────
+    // gridIndex가 totalCells 범위 밖이면 비어있는 가장 앞 셀로 fallback
+    QHash<int, const nv::domain::ChannelConfig*> occupied;
 
-    m_cols = cols;
+    // 1패스: 범위 안에 있는 채널 먼저 배치
+    for (const auto& cfg : configs) {
+        if (cfg.gridIndex >= 0 && cfg.gridIndex < totalCells) {
+            occupied.insert(cfg.gridIndex, &cfg);
+        }
+    }
 
-    // 레거시: 균등 stretch 제거 — 위-왼쪽 정렬, 남는 공간 검정 배경
-    // (setAlignment(AlignTop|AlignLeft) 이미 생성자에서 설정)
+    // 2패스: 범위 밖 채널을 앞에서부터 비어있는 셀에 배치
+    int fallbackCell = 0;
+    for (const auto& cfg : configs) {
+        if (cfg.gridIndex < 0 || cfg.gridIndex >= totalCells) {
+            while (fallbackCell < totalCells && occupied.contains(fallbackCell)) {
+                ++fallbackCell;
+            }
+            if (fallbackCell < totalCells) {
+                occupied.insert(fallbackCell, &cfg);
+                ++fallbackCell;
+            }
+        }
+    }
 
-    int chanIdx = 0;
-    const int totalCells = rows * cols;
-    for (int cell = 0; cell < totalCells; ++cell) {
-        const int r = cell / cols;
-        const int c = cell % cols;
+    // ── 셀 배치 ──────────────────────────────────────────────────────────
+    const QSize cellSize(cellW, cellH);
 
-        if (chanIdx < n) {
-            const auto& cfg = configs[static_cast<std::size_t>(chanIdx)];
-            auto* slot = m_slots ? m_slots->slot(cfg.id) : nullptr;
+    for (int i = 0; i < totalCells; ++i) {
+        const int r = i / cols;
+        const int c = i % cols;
+
+        const nv::domain::ChannelConfig* cfg = occupied.value(i, nullptr);
+
+        if (cfg != nullptr) {
+            auto* slot = m_slots ? m_slots->slot(cfg->id) : nullptr;
             if (slot != nullptr) {
-                auto* tile = new Tile(*slot, cfg.id, QString::fromStdString(cfg.name), this);
+                auto* tile = new Tile(*slot, cfg->id,
+                                      QString::fromStdString(cfg->name), this);
+                tile->setFixedSize(cellSize);
                 m_grid->addWidget(tile, r, c);
-                m_tiles[QString::fromStdString(cfg.id)] = tile;
+                m_tiles[QString::fromStdString(cfg->id)] = tile;
 
                 connect(tile->video, &VideoTileWidget::framePainted, this,
-                        [this, id = cfg.id] { m_cb.framePainted(id); });
+                        [this, id = cfg->id] { m_cb.framePainted(id); });
 
                 connect(tile, &QWidget::customContextMenuRequested, this,
                         [this, tile](const QPoint& p) {
@@ -221,22 +240,44 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
                         m_cb.swapRequested(tile->channelId,
                                            chosen->data().toString().toStdString());
                 });
-
-                ++chanIdx;
                 continue;
             }
         }
 
-        // 빈 셀 (레거시 GRID_CELL_STYLE: #ededed, "No Stream" #777 14px)
+        // 빈 셀 — 회색 "No Stream" 플레이스홀더 (#ededed, #777 14px)
         auto* empty = new QLabel(QStringLiteral("No Stream"), this);
         empty->setAlignment(Qt::AlignCenter);
         empty->setStyleSheet(
             QStringLiteral("color:#777; font-size:14px; background:#ededed;"));
-        empty->setMinimumSize(160, 120);
+        empty->setFixedSize(cellSize);
         m_grid->addWidget(empty, r, c);
-
-        if (chanIdx < n) ++chanIdx;  // slot이 null인 채널도 셀 하나 소비
     }
+
+    // ── 캐시 갱신 ────────────────────────────────────────────────────────
+    m_cachedCols  = cols;
+    m_cachedRows  = rows;
+    m_cachedCellW = cellW;
+    m_cachedCellH = cellH;
+}
+
+void GridView::resizeEvent(QResizeEvent* ev)
+{
+    QWidget::resizeEvent(ev);
+    relayout();
+}
+
+void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
+                       int manualColumns)
+{
+    // 파라미터 저장 — resizeEvent에서 재호출 시 사용
+    m_lastConfigs       = configs;
+    m_lastManualColumns = manualColumns;
+
+    // 캐시를 무효화해 relayout()이 반드시 재구성하도록 강제
+    m_cachedCols  = 0;
+    m_cachedRows  = 0;
+    m_cachedCellW = 0;
+    m_cachedCellH = 0;
 
     relayout();
 }
