@@ -5,6 +5,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSet>
 #include <QStatusBar>
 #include <QTabBar>
 #include <QTabWidget>
@@ -264,6 +265,14 @@ void MainWindow::onChannelList(QVector<QString> ids, QVector<QString> names,
                                QVector<QString> urls, QVector<int> gridIndexes,
                                QVector<bool> autoConnects) {
     m_channels.clear();
+    // 제거된 채널을 m_streaming에서 정리: 현재 id 집합에 없으면 삭제
+    QSet<QString> currentIds(ids.begin(), ids.end());
+    for (auto it = m_streaming.begin(); it != m_streaming.end(); ) {
+        if (!currentIds.contains(it.key()))
+            it = m_streaming.erase(it);
+        else
+            ++it;
+    }
     for (int i = 0; i < ids.size(); ++i) {
         nv::domain::ChannelConfig cfg;
         cfg.id          = ids[i].toStdString();
@@ -272,12 +281,13 @@ void MainWindow::onChannelList(QVector<QString> ids, QVector<QString> names,
         cfg.gridIndex   = gridIndexes[i];
         cfg.autoConnect = i < autoConnects.size() ? autoConnects[i] : false;
         m_channels.push_back(std::move(cfg));
+        // 신규 채널은 미연결(false) 초기값 설정
+        if (!m_streaming.contains(ids[i]))
+            m_streaming[ids[i]] = false;
     }
     m_channelPanel->updateChannels(m_channels);
     rebuildGrid();
-    // 상태바 채널 수 갱신
-    m_statusChannels->setText(
-        QStringLiteral("전체 %1 채널").arg(static_cast<int>(m_channels.size())));
+    updateStatusBar();
 }
 
 void MainWindow::rebuildGrid() {
@@ -288,6 +298,33 @@ void MainWindow::onSnapshot(QString channelId, QString state, int attempts, QLis
                             double pps, qlonglong msSinceLastPacket, QString reason) {
     m_grid->updateTileStatus(channelId, state, attempts, stages, pps, msSinceLastPacket, reason);
     m_channelPanel->updateStatus(channelId, state, reason);
+    // A1: Streaming 여부 맵 갱신
+    m_streaming[channelId] = (state == QStringLiteral("Streaming"));
+    updateStatusBar();
+}
+
+void MainWindow::updateStatusBar() {
+    const int total = static_cast<int>(m_channels.size());
+    int streaming = 0;
+    for (bool v : m_streaming)
+        if (v) ++streaming;
+
+    if (total == 0) {
+        m_statusChannels->setText(QStringLiteral("전체 0 채널"));
+        m_statusChannels->setStyleSheet(QStringLiteral("color: #444; font-size: 11px;"));
+        return;
+    }
+
+    const QString text = (streaming == 0)
+        ? QStringLiteral("연결 %1 / 전체 %2 ⚠ 전 채널 끊김").arg(streaming).arg(total)
+        : QStringLiteral("연결 %1 / 전체 %2").arg(streaming).arg(total);
+
+    const QString style = (streaming == 0)
+        ? QStringLiteral("color: #d13438; font-weight: bold; font-size: 11px;")
+        : QStringLiteral("color: #444; font-size: 11px;");
+
+    m_statusChannels->setText(text);
+    m_statusChannels->setStyleSheet(style);
 }
 
 void MainWindow::openAddDialog() {

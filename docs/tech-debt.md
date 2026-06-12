@@ -11,9 +11,9 @@
 | 5 | UI 채널 목록 3중 캐시 | MainWindow/GridView/ChannelListPanel 수동 동기화 | M3 (UI 모델 단일화) |
 | 6 | GridView→infra 직접 의존 | 슬롯 조회 포트 부재 (헥사고날 위반) | **부분 해소(M2b)**: 포트(IFrameSurfaceRegistry)는 추가됐으나 GridView가 아직 concrete ChannelSourceFactory.slot() 사용. UI 전환은 zero-copy 작업과 함께 |
 | 7 | nextGridIndex O(n²)·전량 재직렬화 | 20~32ch 무시 가능 | 채널 수 확장 시 |
-| 8 | 슬롯 레지스트리 무한 증가 | destroySource no-op + chN ID 미재사용 — 추가/삭제 반복 시 슬롯 누적 | M2b (IFrameSurfaceRegistry 포트화 시 수명 정리) |
+| 8 | 슬롯 레지스트리 무한 증가 | 미해소 — destroySource 여전히 no-op(ChannelSourceFactory.cpp:17). chN ID 미재사용이라 add/remove 반복 시 누적(최대 채널수로 유한하지 않음). M3에서 슬롯 GC 또는 ID 재사용 | M3 |
 | 9 | soak.csv 무한 append·상대경로 | 회전/상한 없음 | M2b ride-along (SoakLogger 추출) |
-| 10 | URL 평문 표시 | rtsp://user:pass@ 자격증명 화면 노출 | M2b ride-along (마스킹) |
+| 10 | URL 평문 표시 | 미수행 — M3로 재지정. rtsp://user:pass@ 형태를 화면·로그에서 마스킹 | M3 |
 | 11 | 패널/컬럼 선택 미영속 | QSettings 저장 안 함 — 재시작 리셋 | M3 |
 
 ## M2a 최종 리뷰(2026-06-12) 잔여 — 머지 승인됨, 비차단
@@ -23,6 +23,7 @@
 | 12 | CompositeLogger::setCallback 스레드 안전성 | log()와 setCallback 간 미동기화 — 현재 teardown 순서(drain 후 호출)로 레이스 창 near-zero | **해소(B3/M2b)**: SoakLogger 추출 시 atomic 처리 적용 확인 |
 | 13 | GridView m_tiles QString 키 | relayout 핫패스에서 fromStdString 반복 — 32ch에서 무영향 | **해소(B5/M2b)**: RhiVideoRenderer/SwVideoRenderer 도입 시 std::string 키로 전환 |
 | 14 | 상태→한글/색 매핑 중복 | GridView·ChannelListPanel 2곳 복제 | M2b ride-along (StatusDisplay 추출) |
+| — | 전 채널 다운 경보 | 상태바 "연결 N / 전체 M" 표시, M>0 && N==0 시 빨강+굵게+경보 문구 | **구현됨(M2a closeout)**: MainWindow.cpp updateStatusBar() |
 
 ## M2b 실측 후 (2026-06-12)
 

@@ -1,5 +1,6 @@
 #pragma once
 #include <QMainWindow>
+#include <QMap>
 #include <QVector>
 #include <functional>
 #include <memory>
@@ -76,6 +77,11 @@ private:
     QLabel* m_statusMem = nullptr;
 
     std::vector<nv::domain::ChannelConfig> m_channels;  // UI cache
+
+    // A1: 채널별 Streaming 여부 추적 (상태바 경보용)
+    QMap<QString, bool> m_streaming;
+
+    void updateStatusBar();
 
     // Fix 5: ResourceMonitor 소유권 명시 (unique_ptr — 소멸 자동화)
     std::unique_ptr<nv::infra::ResourceMonitor> m_resourceMonitor;
