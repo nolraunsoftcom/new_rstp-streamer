@@ -1,4 +1,5 @@
 #include "HwContext.h"
+#include <cstdlib>
 
 namespace nv::infra {
 
@@ -33,6 +34,9 @@ AVPixelFormat HwContext::getFormat(AVCodecContext* ctx, const AVPixelFormat* fmt
 }
 
 bool HwContext::init(AVCodecContext* dec, const AVCodec* codec) {
+    // NV_FORCE_SW=1 이면 HW 디코딩을 강제 비활성화 — 성능 비교·문제 진단용 영구 스위치.
+    // 기본(미설정) 실행에는 영향 없음.
+    if (std::getenv("NV_FORCE_SW") != nullptr) return false;
     if (kHwType == AV_HWDEVICE_TYPE_NONE) return false;
 
     // 1) 이 코덱이 타깃 디바이스 타입을 hw_device_ctx 방식으로 지원하는지 찾는다.
