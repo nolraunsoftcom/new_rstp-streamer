@@ -108,7 +108,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
             av_packet_unref(pkt);
             continue;
         }
-        listener->onPacketReceived();
+        if (!m_stop) listener->onPacketReceived();
 
         const int sendRc = avcodec_send_packet(dec, pkt);
         av_packet_unref(pkt);
@@ -117,7 +117,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
             break;
         }
         while (avcodec_receive_frame(dec, frm) == 0) {
-            listener->onFrameDecoded();
+            if (!m_stop) listener->onFrameDecoded();
             sws = sws_getCachedContext(sws, frm->width, frm->height,
                                        static_cast<AVPixelFormat>(frm->format),
                                        frm->width, frm->height, AV_PIX_FMT_RGBA,

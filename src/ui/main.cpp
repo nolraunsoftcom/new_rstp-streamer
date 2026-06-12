@@ -46,7 +46,8 @@ int main(int argc, char** argv) {
     nv::ui::MainWindow win(frameSlot, {
         .connectTo = [&](std::string url) {
             executor.post([&, url = std::move(url)] {
-                ctrl.setUrl(url);   // Idle일 때만 반영
+                ctrl.disconnect();  // 어떤 상태든 Idle로 — Failed에서 URL 수정 후 연결 시
+                ctrl.setUrl(url);   // 옛 URL로 조용히 붙는 함정 방지 (외부 리뷰 지적)
                 ctrl.connect();
             });
         },

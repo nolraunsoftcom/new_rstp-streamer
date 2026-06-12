@@ -31,4 +31,4 @@ add_executable(nv_integration_tests
 target_include_directories(nv_integration_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(nv_integration_tests PRIVATE nv_infra Catch2::Catch2WithMain)
 target_compile_definitions(nv_integration_tests PRIVATE PROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-catch_discover_tests(nv_integration_tests PROPERTIES LABELS integration)
+catch_discover_tests(nv_integration_tests PROPERTIES LABELS integration SKIP_RETURN_CODE 4)
