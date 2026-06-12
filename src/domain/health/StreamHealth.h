@@ -55,6 +55,8 @@ public:
 
     DiagnosisReason failedReason() const { return m_reason; }
 
+    bool operator==(const StreamHealth&) const = default;
+
 private:
     std::array<StageState, kAllHealthStages.size()> m_states{};  // 모두 Unknown(0)
     DiagnosisReason m_reason = DiagnosisReason::None;

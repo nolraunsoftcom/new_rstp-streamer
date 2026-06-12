@@ -40,28 +40,66 @@ void ChannelController::logTransition(std::string_view trigger) {
                  m_sm.lastReason());
 }
 
+void ChannelController::setUrl(std::string url) {
+    if (m_sm.state() != ConnState::Idle) return;
+    m_url = std::move(url);
+}
+
+void ChannelController::setObserver(std::function<void(const ChannelSnapshot&)> obs) {
+    m_observer = std::move(obs);
+}
+
+void ChannelController::notifyIfChanged() {
+    if (!m_observer) return;
+    ChannelSnapshot s{m_sm.state(), m_sm.reconnectAttempts(), m_sm.lastReason(), m_health};
+    s.packetsPerSec = m_packetsPerSec;
+    s.msSinceLastPacket =
+        m_lastPacketAt ? std::chrono::duration_cast<std::chrono::milliseconds>(
+                             m_clock.now() - *m_lastPacketAt)
+                             .count()
+                       : -1;
+    if (s == m_lastSnapshot) return;
+    m_lastSnapshot = s;
+    m_observer(s);
+}
+
 void ChannelController::connect() {
+    m_lastRateAt = m_clock.now(); m_packetsInWindow = 0; m_lastPacketAt.reset(); m_packetsPerSec = 0.0;
     apply(m_sm.connectRequested(m_clock.now()));
     logTransition("connect");
+    notifyIfChanged();
 }
 
 void ChannelController::disconnect() {
+    m_lastRateAt = m_clock.now(); m_packetsInWindow = 0; m_lastPacketAt.reset(); m_packetsPerSec = 0.0;
     apply(m_sm.disconnectRequested(m_clock.now()));
     logTransition("disconnect");
+    notifyIfChanged();
 }
 
 void ChannelController::retry() {
     apply(m_sm.retryRequested(m_clock.now()));
     logTransition("retry");
+    notifyIfChanged();
 }
 
 void ChannelController::notifySourceAvailable() {
     const auto before = m_sm.state();
     apply(m_sm.sourceAvailableHint(m_clock.now()));
     if (m_sm.state() != before) logTransition("sourceAvailable");
+    notifyIfChanged();
 }
 
 void ChannelController::tick() {
+    const auto now = m_clock.now();
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastRateAt).count();
+    if (elapsedMs > 0) {
+        m_packetsPerSec = m_packetsInWindow * 1000.0 / static_cast<double>(elapsedMs);
+        m_packetsInWindow = 0;
+        m_lastRateAt = now;
+    }
+
     const auto before = m_sm.state();
     auto t = m_sm.tick(m_clock.now());
     if (m_sm.state() != before) {
@@ -75,6 +113,7 @@ void ChannelController::tick() {
     // markFailed 직후 apply(OpenSource→health.reset())로 실패 기록이 곧바로 지워질 수 있다.
     // 의도된 동작: 실패는 로그에 남고, health는 새 사이클 상태를 보여준다.
     apply(t);
+    notifyIfChanged();
 }
 
 void ChannelController::onSessionOpened() {
@@ -85,23 +124,28 @@ void ChannelController::onSessionOpened() {
         m_health.markReached(HealthStage::RtspSession);
         logTransition("sessionOpened");
     }
+    notifyIfChanged();
 }
 
 void ChannelController::onPacketReceived() {
     if (!m_sourceAlive) return;
+    ++m_packetsInWindow; m_lastPacketAt = m_clock.now();
     apply(m_sm.packetReceived(m_clock.now()));
     m_health.markReached(HealthStage::PacketFlow);
+    notifyIfChanged();
 }
 
 void ChannelController::onFrameDecoded() {
     if (!m_sourceAlive) return;
     m_health.markReached(HealthStage::Decoding);   // 상태머신 전이 없음 — 진단 전용
+    notifyIfChanged();
 }
 
 void ChannelController::onFramePresented() {
     if (!m_sourceAlive) return;
     apply(m_sm.framePresented(m_clock.now()));
     m_health.markReached(HealthStage::Presenting);
+    notifyIfChanged();
 }
 
 void ChannelController::onSourceError(DiagnosisReason reason) {
@@ -113,6 +157,7 @@ void ChannelController::onSourceError(DiagnosisReason reason) {
     // lastReason은 GaveUp(정책 결정)이 되지만, 운영자 진단에는 근접 원인이 더 유용하다.
     m_health.markFailed(stage, reason);
     logTransition("sourceError");
+    notifyIfChanged();
 }
 
 } // namespace nv::app
