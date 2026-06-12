@@ -29,7 +29,8 @@ public:
 
     void rebuild(const std::vector<nv::domain::ChannelConfig>& configs, int manualColumns);
     void updateTileStatus(const QString& channelId, const QString& state, int attempts,
-                          const QList<int>& stages, double pps, qlonglong msSince);
+                          const QList<int>& stages, double pps, qlonglong msSince,
+                          const QString& reason);
 
 protected:
     void resizeEvent(QResizeEvent* ev) override;

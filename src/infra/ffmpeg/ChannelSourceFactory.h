@@ -2,6 +2,8 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 #include "src/app/ports/IChannelRuntimeFactory.h"
 #include "src/app/ports/IExecutor.h"
 #include "src/app/MarshallingStreamSource.h"
@@ -22,6 +24,7 @@ public:
     void destroySource(const std::string& channelId) override;
 
     LatestFrameSlot* slot(const std::string& channelId);   // UI 조회용 (없으면 nullptr)
+    std::vector<std::string> slotIds();                    // 통계용 슬롯 키 목록 (뮤텍스 보호)
 
 private:
     // 소유권을 한 덩어리로: Marshalling(외피) ← Ffmpeg(내부) ← slot(레지스트리 소유)

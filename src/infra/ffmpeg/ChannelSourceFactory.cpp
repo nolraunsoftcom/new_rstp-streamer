@@ -24,4 +24,12 @@ LatestFrameSlot* ChannelSourceFactory::slot(const std::string& channelId) {
     return it == m_slots.end() ? nullptr : it->second.get();
 }
 
+std::vector<std::string> ChannelSourceFactory::slotIds() {
+    std::lock_guard lk(m_mu);
+    std::vector<std::string> ids;
+    ids.reserve(m_slots.size());
+    for (const auto& [id, _] : m_slots) ids.push_back(id);
+    return ids;
+}
+
 } // namespace nv::infra

@@ -13,6 +13,9 @@ namespace nv::app {
 
 // 채널 N개의 수명·배치·영속을 관리한다. 모든 메서드는 control 스레드에서만 호출 (설계 D6).
 // 채널 독립(설계 R2): 한 채널의 추가/삭제/장애가 다른 채널의 소스·컨트롤러를 건드리지 않는다.
+//
+// **스레드 계약: 모든 메서드(옵저버 설정 포함)는 control 스레드(executor)에서만 호출한다.**
+// UI/조립부는 executor.post로 진입할 것.
 class ChannelManager {
 public:
     static constexpr int kPerformanceTargetChannels = 20;  // 성능 게이트 기준선 (M2b)
@@ -49,6 +52,7 @@ private:
     };
 
     Entry& makeEntry(nv::domain::ChannelConfig cfg);
+    void bindObserver(const std::string& id, Entry& e);  // Fix 6: 옵저버 바인딩 중복 제거
     void persist();
     void notifyList();
     int nextGridIndex() const;

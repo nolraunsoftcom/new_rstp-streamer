@@ -9,6 +9,9 @@
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <cstdint>
+#include <map>
+#include <string>
 #include <sys/socket.h>
 #include <unistd.h>
 #include "src/app/ChannelManager.h"
@@ -145,10 +148,14 @@ int main(int argc, char** argv) {
                                   Q_ARG(QVector<QString>, urls),
                                   Q_ARG(QVector<int>, gi));
     };
-    mgr.setListChangedObserver(pushList);
 
-    mgr.setSnapshotObserver([&bridge](const std::string& id, const nv::app::ChannelSnapshot& s) {
-        bridge.publish(QString::fromStdString(id), s);
+    // Fix 3: 옵저버 설정은 control 스레드(executor)에서만 — executor.post로 진입
+    // restore post보다 먼저 post되도록 순서 유지 (직렬 보장)
+    executor.post([&] {
+        mgr.setListChangedObserver(pushList);
+        mgr.setSnapshotObserver([&bridge](const std::string& id, const nv::app::ChannelSnapshot& s) {
+            bridge.publish(QString::fromStdString(id), s);
+        });
     });
 
     // --- 시그널/종료 ---
@@ -166,25 +173,44 @@ int main(int argc, char** argv) {
     const bool autoConnect = QApplication::arguments().contains(QStringLiteral("--connect"));
     executor.post([&, autoConnect] { mgr.restore(autoConnect); });
 
-    // --- 소크 통계 (60초마다 RSS 기록) ---
+    // --- 소크 통계 (60초마다 RSS + 표시 fps 기록 — 4컬럼) ---
     QDir().mkpath(QStringLiteral("logs"));
     QTimer statsTimer;
-    QObject::connect(&statsTimer, &QTimer::timeout, &win, [] {
+    std::map<std::string, uint64_t> lastSeqs;
+    QObject::connect(&statsTimer, &QTimer::timeout, &win, [&factory, &lastSeqs] {
         std::FILE* csv = std::fopen("logs/soak.csv", "a");
         if (csv != nullptr) {
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::system_clock::now().time_since_epoch())
                                 .count();
-            std::fprintf(csv, "%lld,%.1f\n", static_cast<long long>(ms),
-                         nv::infra::processRssMb());
+            double fpsTotal = 0.0;
+            int active = 0;
+            for (const auto& id : factory.slotIds()) {
+                if (auto* s = factory.slot(id)) {
+                    nv::infra::LatestFrameSlot::Frame f;
+                    uint64_t seq = lastSeqs[id];
+                    if (s->latest(f, seq)) seq = f.seq;
+                    const uint64_t prev = lastSeqs[id];
+                    if (seq > prev) { fpsTotal += (seq - prev) / 60.0; ++active; }
+                    lastSeqs[id] = seq;
+                }
+            }
+            std::fprintf(csv, "%lld,%.1f,%.1f,%d\n", static_cast<long long>(ms),
+                         nv::infra::processRssMb(), fpsTotal, active);
             std::fclose(csv);
         }
     });
     statsTimer.start(60'000);
 
     const int rc = QApplication::exec();
-    executor.post([&] { mgr.disconnectAll(); });
+    // Fix 4: 명시적 teardown — 콜백 해제 → 채널 정리 → 큐 비움 (스택 수명 의존 제거)
+    executor.post([&] {
+        mgr.setSnapshotObserver(nullptr);
+        mgr.setListChangedObserver(nullptr);
+        mgr.disconnectAll();
+    });
     executor.drain();
+    logger.setCallback(nullptr);
     mgrPtr.store(nullptr);
     return rc;
 }

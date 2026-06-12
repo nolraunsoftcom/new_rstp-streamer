@@ -10,7 +10,6 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
-#include "src/infra/system/ResourceMonitor.h"
 #include "src/ui/channels/ChannelDialog.h"
 #include "src/ui/channels/ChannelListPanel.h"
 #include "src/ui/grid/GridView.h"
@@ -239,11 +238,11 @@ MainWindow::MainWindow(GridView* grid, ChannelListPanel* channelPanel, LogPanel*
     // 패널 토글 버튼 초기 텍스트
     updateToggleButtons();
 
-    // ResourceMonitor 1초 주기 갱신
-    auto* resMonitor = new nv::infra::ResourceMonitor();
+    // ResourceMonitor 1초 주기 갱신 (Fix 5: unique_ptr 멤버 소유)
+    m_resourceMonitor = std::make_unique<nv::infra::ResourceMonitor>();
     auto* resTimer = new QTimer(this);
-    connect(resTimer, &QTimer::timeout, this, [this, resMonitor] {
-        const auto snap = resMonitor->sample();
+    connect(resTimer, &QTimer::timeout, this, [this] {
+        const auto snap = m_resourceMonitor->sample();
         if (snap.systemCpuValid)
             m_statusCpu->setText(QStringLiteral("CPU %1%").arg(snap.systemCpuPercent, 0, 'f', 1));
         if (snap.systemMemoryValid && snap.systemMemoryTotalBytes > 0) {
@@ -280,9 +279,9 @@ void MainWindow::rebuildGrid() {
 }
 
 void MainWindow::onSnapshot(QString channelId, QString state, int attempts, QList<int> stages,
-                            double pps, qlonglong msSinceLastPacket) {
-    m_grid->updateTileStatus(channelId, state, attempts, stages, pps, msSinceLastPacket);
-    m_channelPanel->updateStatus(channelId, state);
+                            double pps, qlonglong msSinceLastPacket, QString reason) {
+    m_grid->updateTileStatus(channelId, state, attempts, stages, pps, msSinceLastPacket, reason);
+    m_channelPanel->updateStatus(channelId, state, reason);
 }
 
 void MainWindow::openAddDialog() {

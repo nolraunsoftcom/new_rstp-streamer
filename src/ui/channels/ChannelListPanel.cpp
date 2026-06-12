@@ -126,16 +126,21 @@ static QString channelStatusColor(const QString& state) {
     return QStringLiteral("#666");
 }
 
-void ChannelListPanel::updateStatus(const QString& channelId, const QString& state) {
+void ChannelListPanel::updateStatus(const QString& channelId, const QString& state,
+                                    const QString& reason) {
     for (int i = 0; i < static_cast<int>(m_configs.size()); ++i) {
         if (QString::fromStdString(m_configs[static_cast<size_t>(i)].id) == channelId) {
             auto* item = m_list->item(i);
             if (item) {
                 const QString displayState = channelStatusText(state);
                 const QString color        = channelStatusColor(state);
+                QString statusStr = displayState;
+                if (reason != QStringLiteral("None") && !reason.isEmpty()) {
+                    statusStr += QStringLiteral(" (%1)").arg(reason);
+                }
                 item->setText(QStringLiteral("%1  [%2]\n%3")
                                   .arg(QString::fromStdString(m_configs[static_cast<size_t>(i)].name),
-                                       displayState,
+                                       statusStr,
                                        QString::fromStdString(m_configs[static_cast<size_t>(i)].url)));
                 item->setForeground(QColor(color));
             }

@@ -16,12 +16,14 @@ public:
                              QString::fromUtf8(toString(s.state).data(),
                                                static_cast<int>(toString(s.state).size())),
                              s.attempts, stages, s.packetsPerSec,
-                             static_cast<qlonglong>(s.msSinceLastPacket));
+                             static_cast<qlonglong>(s.msSinceLastPacket),
+                             QString::fromUtf8(toString(s.reason).data(),
+                                               static_cast<int>(toString(s.reason).size())));
     }
 
 signals:
     void snapshotChanged(QString channelId, QString state, int attempts, QList<int> stages,
-                         double pps, qlonglong msSinceLastPacket);
+                         double pps, qlonglong msSinceLastPacket, QString reason);
 };
 
 } // namespace nv::ui

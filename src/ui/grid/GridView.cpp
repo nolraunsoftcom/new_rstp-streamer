@@ -50,6 +50,7 @@ static const char* packetColor(qlonglong msSince) {
 struct GridView::Tile : public QWidget {
     QLabel*          nameLabel   = nullptr;
     QLabel*          packetLabel = nullptr;
+    QLabel*          stageDots   = nullptr;
     QPushButton*     snapBtn     = nullptr;
     QPushButton*     recBtn      = nullptr;
     VideoTileWidget* video       = nullptr;
@@ -73,6 +74,11 @@ struct GridView::Tile : public QWidget {
         nameLabel->setStyleSheet(
             QStringLiteral("color:#222; font-size:11px; font-weight:bold;"));
 
+        stageDots = new QLabel(QStringLiteral("······"), infoBar);
+        stageDots->setStyleSheet(
+            QStringLiteral("font-size:10px; background:transparent; padding: 0 2px;"));
+        stageDots->setTextFormat(Qt::RichText);
+
         packetLabel = new QLabel(QStringLiteral("패킷 —"), infoBar);
         packetLabel->setStyleSheet(
             QStringLiteral("color:#666; font-size:10px; background:transparent;"));
@@ -94,6 +100,7 @@ struct GridView::Tile : public QWidget {
         barRow->setSpacing(0);
         barRow->addWidget(nameLabel);
         barRow->addStretch();
+        barRow->addWidget(stageDots);
         barRow->addWidget(packetLabel);
         barRow->addWidget(snapBtn);
         barRow->addWidget(recBtn);
@@ -304,12 +311,37 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
 }
 
 void GridView::updateTileStatus(const QString& channelId, const QString& state, int attempts,
-                                const QList<int>& stages, double pps, qlonglong msSince)
+                                const QList<int>& stages, double pps, qlonglong msSince,
+                                const QString& reason)
 {
     auto it = m_tiles.find(channelId);
     if (it == m_tiles.end()) return;
     Tile* t = it->second;
-    (void)stages;
+
+    // ── 6단계 점 인디케이터 (StageState: 0=Unknown, 1=Ok, 2=Failed, 3=NotApplicable)
+    static const char* kStageNames[] = {"장비도달", "Relay수신", "RTSP세션", "패킷수신", "디코딩", "표시"};
+    QString dots;
+    QString tooltip;
+    for (int i = 0; i < stages.size() && i < 6; ++i) {
+        const int s = stages[i];
+        if (s == 3) {
+            dots += QStringLiteral("<span style='color:#bbb'>–</span>");
+            tooltip += QStringLiteral("%1: 해당없음\n").arg(QLatin1String(kStageNames[i]));
+        } else {
+            const char* color = (s == 1) ? "#12823b" : (s == 2) ? "#d13438" : "#999";
+            dots += QStringLiteral("<span style='color:%1'>●</span>").arg(QLatin1String(color));
+            const QString stateStr = (s == 1) ? QStringLiteral("정상")
+                                   : (s == 2) ? QStringLiteral("실패")
+                                              : QStringLiteral("알수없음");
+            if (s == 2 && reason != QStringLiteral("None") && !reason.isEmpty()) {
+                tooltip += QStringLiteral("%1: %2(%3)\n").arg(QLatin1String(kStageNames[i]), stateStr, reason);
+            } else {
+                tooltip += QStringLiteral("%1: %2\n").arg(QLatin1String(kStageNames[i]), stateStr);
+            }
+        }
+    }
+    t->stageDots->setText(dots);
+    t->stageDots->setToolTip(tooltip.trimmed());
 
     // 채널명 (시도 횟수 병기)
     if (attempts > 0) {

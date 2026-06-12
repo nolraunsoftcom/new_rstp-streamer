@@ -2,8 +2,10 @@
 #include <QMainWindow>
 #include <QVector>
 #include <functional>
+#include <memory>
 #include <vector>
 #include "src/domain/channel/ChannelConfig.h"
+#include "src/infra/system/ResourceMonitor.h"
 
 class QComboBox;
 class QButtonGroup;
@@ -42,7 +44,7 @@ public slots:
     void onChannelList(QVector<QString> ids, QVector<QString> names, QVector<QString> urls,
                        QVector<int> gridIndexes);
     void onSnapshot(QString channelId, QString state, int attempts, QList<int> stages,
-                    double pps, qlonglong msSinceLastPacket);
+                    double pps, qlonglong msSinceLastPacket, QString reason);
 
 private:
     void rebuildGrid();
@@ -74,6 +76,9 @@ private:
     QLabel* m_statusMem = nullptr;
 
     std::vector<nv::domain::ChannelConfig> m_channels;  // UI cache
+
+    // Fix 5: ResourceMonitor 소유권 명시 (unique_ptr — 소멸 자동화)
+    std::unique_ptr<nv::infra::ResourceMonitor> m_resourceMonitor;
 };
 
 } // namespace nv::ui

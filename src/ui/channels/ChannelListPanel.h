@@ -26,7 +26,7 @@ public:
     // control → UI (queued): 채널 목록 전체 갱신
     void updateChannels(const std::vector<nv::domain::ChannelConfig>& configs);
     // control → UI (queued): 해당 채널 상태 텍스트 갱신
-    void updateStatus(const QString& channelId, const QString& state);
+    void updateStatus(const QString& channelId, const QString& state, const QString& reason);
 
 private:
     Callbacks m_cb;

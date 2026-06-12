@@ -13,19 +13,23 @@ ChannelManager::ChannelManager(IChannelRepository& repo, IChannelRuntimeFactory&
     : m_repo(repo), m_factory(factory), m_clock(clock), m_logger(logger),
       m_reconnect(reconnect), m_stall(stall), m_maxChannels(maxChannels) {}
 
+// Fix 6: makeEntry와 setSnapshotObserver rebind 루프의 동일 람다를 헬퍼로 추출
+void ChannelManager::bindObserver(const std::string& id, Entry& e) {
+    auto cb = m_snapshotObserver;
+    const std::string entryId = id;
+    e.ctrl->setObserver([cb, entryId](const ChannelSnapshot& s) { cb(entryId, s); });
+}
+
 ChannelManager::Entry& ChannelManager::makeEntry(ChannelConfig cfg) {
     const std::string id = cfg.id;
     auto source = m_factory.createSource(id);
     auto ctrl = std::make_unique<ChannelController>(id, cfg.url, *source, m_clock, m_logger,
                                                     m_reconnect, m_stall);
-    // 스냅샷 옵저버가 이미 설정돼 있으면 즉시 바인딩
-    if (m_snapshotObserver) {
-        auto cb = m_snapshotObserver;
-        ctrl->setObserver([cb, id](const ChannelSnapshot& s) { cb(id, s); });
-    }
     auto [it, ok] = m_entries.emplace(id,
                                       Entry{std::move(cfg), std::move(source), std::move(ctrl)});
     (void)ok;
+    // 스냅샷 옵저버가 이미 설정돼 있으면 즉시 바인딩
+    if (m_snapshotObserver) bindObserver(id, it->second);
     return it->second;
 }
 
@@ -142,11 +146,11 @@ ChannelController* ChannelManager::controller(const std::string& id) {
 void ChannelManager::setSnapshotObserver(
     std::function<void(const std::string&, const ChannelSnapshot&)> obs) {
     m_snapshotObserver = std::move(obs);
-    // 옵저버가 나중에 설정된 경우 기존 엔트리에도 재바인딩
-    for (auto& [id, e] : m_entries) {
-        auto cb = m_snapshotObserver;
-        const std::string entryId = id;
-        e.ctrl->setObserver([cb, entryId](const ChannelSnapshot& s) { cb(entryId, s); });
+    // 옵저버가 나중에 설정된 경우 기존 엔트리에도 재바인딩 (Fix 6: bindObserver 헬퍼 사용)
+    if (m_snapshotObserver) {
+        for (auto& [id, e] : m_entries) bindObserver(id, e);
+    } else {
+        for (auto& [id, e] : m_entries) e.ctrl->setObserver(nullptr);
     }
 }
 
