@@ -1,14 +1,15 @@
 #include "RhiVideoRenderer.h"
 
+#include <cstdio>
 #include <QFile>
 #include <rhi/qrhi.h>
+#include <rhi/qrhi_platform.h>
+#include "src/app/ports/IFrameSurfaceRegistry.h"
 
 namespace nv::ui {
 
 namespace {
 // 풀스크린 사각형 (triangle strip): pos.xy (NDC [-1,1]) + uv. v는 위가 0 (QImage 행 순서).
-// QRhi NDC는 백엔드별로 다르나 QRhiWidget이 clipSpaceCorrMatrix를 쓰지 않는 단순 풀스크린에서는
-// y 반전을 mirrorVertically 또는 uv로 처리. 여기서는 uv.v를 위=0으로 두고 텍스처를 그대로 그린다.
 const float kVertexData[] = {
     // x,    y,     u,    v
     -1.0f, -1.0f,  0.0f, 1.0f,
@@ -26,39 +27,188 @@ QShader loadShader(const QString& path) {
 }
 } // namespace
 
-RhiVideoRenderer::RhiVideoRenderer(QWidget* parent) : QRhiWidget(parent) {
+RhiVideoRenderer::RhiVideoRenderer(QWidget* parent,
+                                   nv::app::IFrameSurfaceRegistry* registry,
+                                   std::string channelId)
+    : QRhiWidget(parent), m_registry(registry), m_channelId(std::move(channelId)) {
     setMinimumSize(160, 120);
     // macOS 기본 Metal. api()는 플랫폼 기본을 사용한다(명시 setApi 불필요).
 }
 
 RhiVideoRenderer::~RhiVideoRenderer() = default;
 
+// ── present(): UI 스레드. rhi()는 여기서 접근 불가(initialize/render 전용)이므로
+//    GPU 자원 생성은 하지 않는다. GpuTexture면 CoreVideo map()만 수행(UI 스레드 안전)해
+//    plane MTLTexture를 보류에 담고, render()가 createFrom으로 래핑해 그린다. ──────────
 void RhiVideoRenderer::present(const nv::app::FrameSurface& surface) {
     if (surface.seq == m_seq) return;
+
+    // 1) NV12 zero-copy 시도 (HW 디코드 + macOS). bridge 미초기화면 건너뜀(RGBA 폴백).
+    if (surface.kind == nv::app::FrameSurface::Kind::GpuTexture &&
+        surface.gpuHandle != nullptr && m_bridgeReady) {
+        nv::infra::PlaneTextures planes;
+        if (m_bridge.map(surface.gpuHandle, planes)) {
+            // 직전에 보류만 되고 아직 안 그려진 NV12 프레임이 있으면 그것부터 정리
+            // (render()가 소비하기 전 새 present가 또 옴 — 스킵된 프레임). 핸들 반납.
+            if (m_hasNv12Pending) {
+                m_bridge.unmap(m_pendingPlanes);
+                m_pendingLuma.reset();
+                m_pendingChroma.reset();
+                if (m_pendingHandle != nullptr && m_registry != nullptr) {
+                    m_registry->releaseConsumed(m_channelId, m_pendingHandle);
+                }
+                m_pendingHandle = nullptr;
+            }
+            m_pendingPlanes = planes;
+            m_pendingHandle = surface.gpuHandle;          // 소비자 소유 ref — 우리가 인수
+            m_pendingFullRange = planes.fullRange ? 1 : 0;
+            m_hasNv12Pending = true;
+            m_seq = surface.seq;
+            update();
+            return;
+        }
+        // map 실패 → 핸들은 우리가 받았으니 즉시 반납 후 RGBA 폴백으로.
+        if (m_registry != nullptr) {
+            m_registry->releaseConsumed(m_channelId, surface.gpuHandle);
+        }
+    } else if (surface.kind == nv::app::FrameSurface::Kind::GpuTexture &&
+               surface.gpuHandle != nullptr && m_registry != nullptr) {
+        // bridge 미준비(예: 비-Apple, 캐시 실패)인데 GpuTexture 핸들을 받았다 — RGBA 폴백을
+        // 쓰므로 핸들은 즉시 반납한다(누수 방지).
+        m_registry->releaseConsumed(m_channelId, surface.gpuHandle);
+    }
+
+    // 2) RGBA 폴백(CpuRgba, 또는 zero-copy 실패한 GpuTexture의 동반 rgba).
     if (surface.rgba.empty() || surface.width <= 0 || surface.height <= 0) return;
     m_seq = surface.seq;
-    // 슬롯/서피스 버퍼와 수명 분리 (.copy()).
+    // 슬롯/서피스 버퍼와 수명 분리 (.copy()) — RGBA 폴백에만 발생(zero-copy는 GPU 직행).
     m_pending = QImage(surface.rgba.data(), surface.width, surface.height,
                        surface.width * 4, QImage::Format_RGBA8888)
                     .copy();
     m_hasPending = true;
-    update();   // QRhiWidget render() 1회 유발
+    update();
+}
+
+void RhiVideoRenderer::releaseInflightNv12(bool returnHandle) {
+    m_bridge.unmap(m_inflightPlanes);
+    m_inflightLuma.reset();
+    m_inflightChroma.reset();
+    if (m_inflightHandle != nullptr) {
+        if (returnHandle && m_registry != nullptr) {
+            m_registry->releaseConsumed(m_channelId, m_inflightHandle);
+        }
+        m_inflightHandle = nullptr;
+    }
 }
 
 void RhiVideoRenderer::releaseGpuResources() {
+    // 보류/인플라이트 NV12 자원 — 소멸/리셋 경로에선 핸들 반납 생략(레지스트리 수명 불확실).
+    if (m_hasNv12Pending) {
+        m_bridge.unmap(m_pendingPlanes);
+        m_pendingLuma.reset();
+        m_pendingChroma.reset();
+        if (m_pendingHandle != nullptr && m_registry != nullptr) {
+            m_registry->releaseConsumed(m_channelId, m_pendingHandle);
+        }
+        m_pendingHandle = nullptr;
+        m_hasNv12Pending = false;
+    }
+    releaseInflightNv12(/*returnHandle=*/true);
+
+    m_nv12Pipeline.reset();
+    m_nv12Srb.reset();
+    m_nv12Ubuf.reset();
+    m_nv12Size = QSize();
+
     m_pipeline.reset();
     m_srb.reset();
-    m_sampler.reset();
     m_texture.reset();
+    m_texSize = QSize();
+
+    m_sampler.reset();
     m_ubuf.reset();
     m_vbuf.reset();
-    m_texSize = QSize();
     m_vbufUploaded = false;
+    m_bridgeReady = false;
 }
 
 void RhiVideoRenderer::releaseResources() {
     releaseGpuResources();
     m_rhi = nullptr;
+}
+
+void RhiVideoRenderer::ensureRgbaPipeline() {
+    if (m_pipeline) return;
+    if (!m_texture) {
+        m_texture.reset(m_rhi->newTexture(QRhiTexture::RGBA8, QSize(1, 1)));
+        m_texture->create();
+        m_texSize = QSize(1, 1);
+    }
+    m_srb.reset(m_rhi->newShaderResourceBindings());
+    m_srb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0, QRhiShaderResourceBinding::VertexStage, m_ubuf.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            1, QRhiShaderResourceBinding::FragmentStage, m_texture.get(), m_sampler.get()),
+    });
+    m_srb->create();
+
+    m_pipeline.reset(m_rhi->newGraphicsPipeline());
+    m_pipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    m_pipeline->setShaderStages({
+        {QRhiShaderStage::Vertex, loadShader(QStringLiteral(":/shaders/texture.vert.qsb"))},
+        {QRhiShaderStage::Fragment, loadShader(QStringLiteral(":/shaders/texture.frag.qsb"))},
+    });
+    QRhiVertexInputLayout inputLayout;
+    inputLayout.setBindings({{4 * sizeof(float)}});
+    inputLayout.setAttributes({
+        {0, 0, QRhiVertexInputAttribute::Float2, 0},
+        {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},
+    });
+    m_pipeline->setVertexInputLayout(inputLayout);
+    m_pipeline->setShaderResourceBindings(m_srb.get());
+    m_pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    m_pipeline->create();
+}
+
+void RhiVideoRenderer::ensureNv12Pipeline() {
+    if (m_nv12Pipeline) return;
+
+    m_nv12Ubuf.reset(m_rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
+                                      sizeof(int)));
+    m_nv12Ubuf->create();
+
+    // SRB는 실제 평면 텍스처가 생긴 뒤(render) 바인딩을 갱신한다. 파이프라인 생성 시점에는
+    // 1x1 placeholder 텍스처가 필요 — RGBA placeholder(m_texture)를 두 슬롯에 임시 바인딩.
+    m_nv12Srb.reset(m_rhi->newShaderResourceBindings());
+    m_nv12Srb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0, QRhiShaderResourceBinding::VertexStage, m_ubuf.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            1, QRhiShaderResourceBinding::FragmentStage, m_texture.get(), m_sampler.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            2, QRhiShaderResourceBinding::FragmentStage, m_texture.get(), m_sampler.get()),
+        QRhiShaderResourceBinding::uniformBuffer(
+            3, QRhiShaderResourceBinding::FragmentStage, m_nv12Ubuf.get()),
+    });
+    m_nv12Srb->create();
+
+    m_nv12Pipeline.reset(m_rhi->newGraphicsPipeline());
+    m_nv12Pipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    m_nv12Pipeline->setShaderStages({
+        {QRhiShaderStage::Vertex, loadShader(QStringLiteral(":/shaders/texture.vert.qsb"))},
+        {QRhiShaderStage::Fragment, loadShader(QStringLiteral(":/shaders/nv12.frag.qsb"))},
+    });
+    QRhiVertexInputLayout inputLayout;
+    inputLayout.setBindings({{4 * sizeof(float)}});
+    inputLayout.setAttributes({
+        {0, 0, QRhiVertexInputAttribute::Float2, 0},
+        {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},
+    });
+    m_nv12Pipeline->setVertexInputLayout(inputLayout);
+    m_nv12Pipeline->setShaderResourceBindings(m_nv12Srb.get());
+    m_nv12Pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    m_nv12Pipeline->create();
 }
 
 void RhiVideoRenderer::initialize(QRhiCommandBuffer*) {
@@ -68,7 +218,8 @@ void RhiVideoRenderer::initialize(QRhiCommandBuffer*) {
         m_rhi = rhi();
     }
 
-    if (!m_pipeline) {
+    // 공통 자원(정점/scale 유니폼/샘플러) — 1회.
+    if (!m_vbuf) {
         m_vbuf.reset(m_rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer,
                                       sizeof(kVertexData)));
         m_vbuf->create();
@@ -82,40 +233,21 @@ void RhiVideoRenderer::initialize(QRhiCommandBuffer*) {
                                           QRhiSampler::None, QRhiSampler::ClampToEdge,
                                           QRhiSampler::ClampToEdge));
         m_sampler->create();
+    }
 
-        // 텍스처는 첫 프레임 크기에 맞춰 render()에서 생성. 여기서는 1x1 placeholder로
-        // SRB/파이프라인을 구성해 두고, 크기 변경 시 텍스처만 교체한다.
-        if (!m_texture) {
-            m_texture.reset(m_rhi->newTexture(QRhiTexture::RGBA8, QSize(1, 1)));
-            m_texture->create();
-            m_texSize = QSize(1, 1);
+    ensureRgbaPipeline();   // placeholder 텍스처(m_texture)를 NV12 SRB도 공유하므로 먼저.
+
+    // NV12 zero-copy 브리지 — QRhi가 쓰는 MTLDevice로 CVMetalTextureCache 생성(macOS만).
+    if (!m_bridgeReady) {
+        const QRhiNativeHandles* nh = m_rhi->nativeHandles();
+        const auto* mh = static_cast<const QRhiMetalNativeHandles*>(nh);
+        if (mh != nullptr && mh->dev != nullptr) {
+            void* dev = reinterpret_cast<void*>(mh->dev);
+            if (m_bridge.init(dev)) {
+                m_bridgeReady = true;
+                ensureNv12Pipeline();
+            }
         }
-
-        m_srb.reset(m_rhi->newShaderResourceBindings());
-        m_srb->setBindings({
-            QRhiShaderResourceBinding::uniformBuffer(
-                0, QRhiShaderResourceBinding::VertexStage, m_ubuf.get()),
-            QRhiShaderResourceBinding::sampledTexture(
-                1, QRhiShaderResourceBinding::FragmentStage, m_texture.get(), m_sampler.get()),
-        });
-        m_srb->create();
-
-        m_pipeline.reset(m_rhi->newGraphicsPipeline());
-        m_pipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
-        m_pipeline->setShaderStages({
-            {QRhiShaderStage::Vertex, loadShader(QStringLiteral(":/shaders/texture.vert.qsb"))},
-            {QRhiShaderStage::Fragment, loadShader(QStringLiteral(":/shaders/texture.frag.qsb"))},
-        });
-        QRhiVertexInputLayout inputLayout;
-        inputLayout.setBindings({{4 * sizeof(float)}});
-        inputLayout.setAttributes({
-            {0, 0, QRhiVertexInputAttribute::Float2, 0},
-            {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},
-        });
-        m_pipeline->setVertexInputLayout(inputLayout);
-        m_pipeline->setShaderResourceBindings(m_srb.get());
-        m_pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
-        m_pipeline->create();
     }
 }
 
@@ -128,10 +260,91 @@ void RhiVideoRenderer::render(QRhiCommandBuffer* cb) {
     }
 
     bool drewNew = false;
-    if (m_hasPending && !m_pending.isNull()) {
+    bool useNv12 = false;
+
+    // ── NV12 보류 프레임 소비: createFrom으로 두 평면을 QRhiTexture로 래핑 ───────────
+    if (m_hasNv12Pending && m_nv12Pipeline && m_bridgeReady) {
+        const int lumaW = m_pendingPlanes.width;
+        const int lumaH = m_pendingPlanes.height;
+        if (lumaW > 0 && lumaH > 0 &&
+            m_pendingPlanes.lumaTex != nullptr && m_pendingPlanes.chromaTex != nullptr) {
+            // Y = R8 (full size), CbCr = RG8 (half size).
+            auto luma = std::unique_ptr<QRhiTexture>(
+                m_rhi->newTexture(QRhiTexture::R8, QSize(lumaW, lumaH)));
+            luma->setFormat(QRhiTexture::R8);
+            luma->setPixelSize(QSize(lumaW, lumaH));
+            auto chroma = std::unique_ptr<QRhiTexture>(
+                m_rhi->newTexture(QRhiTexture::RG8, QSize((lumaW + 1) / 2, (lumaH + 1) / 2)));
+            chroma->setFormat(QRhiTexture::RG8);
+            chroma->setPixelSize(QSize((lumaW + 1) / 2, (lumaH + 1) / 2));
+
+            QRhiTexture::NativeTexture lumaNative{
+                reinterpret_cast<quint64>(m_pendingPlanes.lumaTex), 0};
+            QRhiTexture::NativeTexture chromaNative{
+                reinterpret_cast<quint64>(m_pendingPlanes.chromaTex), 0};
+
+            if (luma->createFrom(lumaNative) && chroma->createFrom(chromaNative)) {
+                // 직전 in-flight 자원 해제(더블버퍼) — GPU가 직전 프레임을 다 쓴 뒤.
+                releaseInflightNv12(/*returnHandle=*/true);
+
+                m_nv12Srb->setBindings({
+                    QRhiShaderResourceBinding::uniformBuffer(
+                        0, QRhiShaderResourceBinding::VertexStage, m_ubuf.get()),
+                    QRhiShaderResourceBinding::sampledTexture(
+                        1, QRhiShaderResourceBinding::FragmentStage, luma.get(), m_sampler.get()),
+                    QRhiShaderResourceBinding::sampledTexture(
+                        2, QRhiShaderResourceBinding::FragmentStage, chroma.get(), m_sampler.get()),
+                    QRhiShaderResourceBinding::uniformBuffer(
+                        3, QRhiShaderResourceBinding::FragmentStage, m_nv12Ubuf.get()),
+                });
+                m_nv12Srb->create();
+
+                const int fr = m_pendingFullRange;
+                batch->updateDynamicBuffer(m_nv12Ubuf.get(), 0, sizeof(int), &fr);
+
+                // 보류 → in-flight 이동(소유권 이전).
+                m_inflightPlanes = m_pendingPlanes;
+                m_inflightLuma = std::move(luma);
+                m_inflightChroma = std::move(chroma);
+                m_inflightHandle = m_pendingHandle;
+                m_nv12Size = QSize(lumaW, lumaH);
+
+                m_pendingPlanes = nv::infra::PlaneTextures{};
+                m_pendingHandle = nullptr;
+                m_hasNv12Pending = false;
+                useNv12 = true;
+                drewNew = true;
+
+                if (!m_loggedPath) {
+                    std::fprintf(stderr, "[RhiVideoRenderer] render path = NV12 zero-copy\n");
+                    m_loggedPath = true;
+                }
+            } else {
+                // createFrom 실패 — 보류 NV12 폐기 후 RGBA 폴백.
+                m_bridge.unmap(m_pendingPlanes);
+                if (m_pendingHandle != nullptr && m_registry != nullptr) {
+                    m_registry->releaseConsumed(m_channelId, m_pendingHandle);
+                }
+                m_pendingPlanes = nv::infra::PlaneTextures{};
+                m_pendingHandle = nullptr;
+                m_hasNv12Pending = false;
+            }
+        } else {
+            // 유효치 않은 보류 — 폐기.
+            m_bridge.unmap(m_pendingPlanes);
+            if (m_pendingHandle != nullptr && m_registry != nullptr) {
+                m_registry->releaseConsumed(m_channelId, m_pendingHandle);
+            }
+            m_pendingPlanes = nv::infra::PlaneTextures{};
+            m_pendingHandle = nullptr;
+            m_hasNv12Pending = false;
+        }
+    }
+
+    // ── RGBA 폴백 텍스처 업로드 (NV12를 안 쓸 때만) ──────────────────────────────
+    if (!useNv12 && m_hasPending && !m_pending.isNull()) {
         const QSize imgSize = m_pending.size();
         if (imgSize != m_texSize) {
-            // 해상도 변경 — 텍스처 재생성 후 SRB 갱신.
             m_texture.reset(m_rhi->newTexture(QRhiTexture::RGBA8, imgSize));
             m_texture->create();
             m_texSize = imgSize;
@@ -144,40 +357,60 @@ void RhiVideoRenderer::render(QRhiCommandBuffer* cb) {
             });
             m_srb->create();
         }
-        // QImage(RGBA8888) → 텍스처 업로드. QRhi는 RGBA8을 기대.
         batch->uploadTexture(m_texture.get(), m_pending);
         m_hasPending = false;
         drewNew = true;
+        // RGBA로 전환 — 이전 NV12 in-flight 핸들 반납(스테일 보관 방지).
+        releaseInflightNv12(/*returnHandle=*/true);
+        if (!m_loggedPath) {
+            std::fprintf(stderr, "[RhiVideoRenderer] render path = RGBA\n");
+            m_loggedPath = true;
+        }
     }
 
-    // KeepAspectRatio 레터박스: 텍스처 종횡비를 위젯 종횡비에 맞춰 NDC 배율 계산.
+    // KeepAspectRatio 레터박스: 그릴 텍스처의 픽셀 크기로 NDC 배율 계산.
     const QSize out = renderTarget()->pixelSize();
+    const QSize contentSize = useNv12 ? m_nv12Size : m_texSize;
     float scaleX = 1.0f, scaleY = 1.0f;
-    if (m_texSize.width() > 0 && m_texSize.height() > 0 && out.width() > 0 && out.height() > 0) {
-        const float texAR = static_cast<float>(m_texSize.width()) / m_texSize.height();
+    if (contentSize.width() > 0 && contentSize.height() > 0 &&
+        out.width() > 0 && out.height() > 0) {
+        const float texAR = static_cast<float>(contentSize.width()) / contentSize.height();
         const float winAR = static_cast<float>(out.width()) / out.height();
         if (winAR > texAR) {
-            scaleX = texAR / winAR;   // 창이 더 넓음 — 좌우 레터박스
+            scaleX = texAR / winAR;
         } else {
-            scaleY = winAR / texAR;   // 창이 더 높음 — 상하 레터박스
+            scaleY = winAR / texAR;
         }
     }
     const float scaleData[2] = {scaleX, scaleY};
     batch->updateDynamicBuffer(m_ubuf.get(), 0, 2 * sizeof(float), scaleData);
 
+    // 그릴 파이프라인 선택: NV12 in-flight 자원이 있으면 NV12(이번에 새로 만들었든, 직전
+    // 프레임을 다시 그리는 repaint이든). RGBA 폴백 텍스처를 새로 올렸으면(useNv12==false &&
+    // drewNew via RGBA) RGBA. 둘 다 없으면 마지막 상태 유지(in-flight 우선).
+    const bool drawNv12 = m_nv12Pipeline && m_inflightLuma && (useNv12 || !drewNew);
+    QRhiGraphicsPipeline* pipe = nullptr;
+    QRhiShaderResourceBindings* srb = nullptr;
+    if (drawNv12) {
+        pipe = m_nv12Pipeline.get();
+        srb = m_nv12Srb.get();
+    } else {
+        pipe = m_pipeline.get();
+        srb = m_srb.get();
+    }
+
     cb->beginPass(renderTarget(), QColor(Qt::black), {1.0f, 0}, batch);
-    cb->setGraphicsPipeline(m_pipeline.get());
+    cb->setGraphicsPipeline(pipe);
     cb->setViewport(QRhiViewport(0, 0, out.width(), out.height()));
-    cb->setShaderResources();
+    cb->setShaderResources(srb);
     const QRhiCommandBuffer::VertexInput vbufBinding(m_vbuf.get(), 0);
     cb->setVertexInput(0, 1, &vbufBinding);
-    cb->draw(4);   // triangle strip 4 verts
+    cb->draw(4);
     cb->endPass();
 
     if (drewNew) {
         emit framePainted();   // 표시 확정 — 새 프레임을 GPU에 제출했을 때만
     }
-    // 연속 update() 호출하지 않음 — present()가 새 프레임마다 update()를 호출(폴링 구동).
 }
 
 } // namespace nv::ui

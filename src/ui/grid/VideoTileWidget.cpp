@@ -24,7 +24,9 @@ VideoTileWidget::VideoTileWidget(nv::app::IFrameSurfaceRegistry& registry,
 void VideoTileWidget::installRenderer(RendererKind kind) {
     m_kind = kind;
     if (kind == RendererKind::Rhi) {
-        auto* rhi = new RhiVideoRenderer(this);
+        // RHI 렌더러는 GpuTexture(NV12 zero-copy) 핸들의 수명을 직접 소유한다 — registry/
+        // channelId를 주입해 in-flight 보관 후 releaseConsumed로 반납하게 한다(C3 계약).
+        auto* rhi = new RhiVideoRenderer(this, &m_registry, m_channelId);
         m_renderer = rhi;
         connect(rhi, &RhiVideoRenderer::framePainted, this, &VideoTileWidget::framePainted);
         // QRhi 초기화/렌더 실패 시 런타임 SW 폴백.
@@ -54,15 +56,17 @@ void VideoTileWidget::fallbackToSw() {
 void VideoTileWidget::pollFrame() {
     if (m_renderer == nullptr) return;
     // IFrameSurfaceRegistry 포트로 최신 서피스 조회 (CpuRgba / GpuTexture 모두).
-    // 현재 렌더러는 RGBA만 그리며(zero-copy는 Task3), GpuTexture면 동반 RGBA로 그린다.
     nv::app::FrameSurface surface;
     if (!m_registry.latestSurface(m_channelId, surface, m_seq)) return;
     m_seq = surface.seq;
 
     m_renderer->present(surface);
 
-    // GpuTexture 핸들은 그린 직후 반납 (Task3에서 in-flight 보관으로 정교화).
-    if (surface.kind == nv::app::FrameSurface::Kind::GpuTexture &&
+    // GpuTexture 핸들 수명(C3 계약):
+    //  - RHI 렌더러: 핸들을 in-flight 보관 후 스스로 releaseConsumed로 반납한다 → 여기서 안 함.
+    //  - SW 렌더러: gpuHandle을 무시(동반 RGBA만 그림)하므로 즉시 반납해야 누수가 없다.
+    if (m_kind == RendererKind::Sw &&
+        surface.kind == nv::app::FrameSurface::Kind::GpuTexture &&
         surface.gpuHandle != nullptr) {
         m_registry.releaseConsumed(m_channelId, surface.gpuHandle);
     }

@@ -92,6 +92,7 @@ qt6_add_shaders(nv_ui "nv_ui_shaders"
   FILES
     ui/render/texture.vert
     ui/render/texture.frag
+    ui/render/nv12.frag
 )
 
 # macOS バンドル アイコン
