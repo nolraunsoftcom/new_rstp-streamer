@@ -23,12 +23,17 @@ void VideoTileWidget::pollFrame() {
 
 void VideoTileWidget::paintEvent(QPaintEvent*) {
     QPainter p(this);
-    p.fillRect(rect(), Qt::black);
     if (m_image.isNull()) {
-        p.setPen(Qt::darkGray);
+        // 레거시 VlcWidget placeholder: #ededed 배경 + #777 14px "No Stream"
+        p.fillRect(rect(), QColor(QStringLiteral("#ededed")));
+        p.setPen(QColor(QStringLiteral("#777777")));
+        QFont f = p.font();
+        f.setPixelSize(14);
+        p.setFont(f);
         p.drawText(rect(), Qt::AlignCenter, QStringLiteral("No Stream"));
         return;
     }
+    p.fillRect(rect(), Qt::black);
     const QSize scaled = m_image.size().scaled(size(), Qt::KeepAspectRatio);
     const QRect target(QPoint((width() - scaled.width()) / 2, (height() - scaled.height()) / 2),
                        scaled);

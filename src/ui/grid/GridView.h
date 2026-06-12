@@ -30,13 +30,19 @@ public:
     void updateTileStatus(const QString& channelId, const QString& state, int attempts,
                           const QList<int>& stages, double pps, qlonglong msSince);
 
+protected:
+    void resizeEvent(QResizeEvent* ev) override;
+
 private:
+    void relayout();
+
     nv::infra::ChannelSourceFactory* m_slots = nullptr;
     Callbacks m_cb;
     QGridLayout* m_grid = nullptr;
     struct Tile;
     std::map<QString, Tile*> m_tiles;             // channelId → tile
     std::vector<nv::domain::ChannelConfig> m_lastConfigs;
+    int m_cols = 1;  // current effective column count
 };
 
 } // namespace nv::ui

@@ -104,15 +104,40 @@ void ChannelListPanel::updateChannels(const std::vector<nv::domain::ChannelConfi
     }
 }
 
+// 레거시 VlcWidget::statusText() + applyChannelStatusLabel() 매핑
+static QString channelStatusText(const QString& state) {
+    if (state == QStringLiteral("Streaming"))    return QStringLiteral("연결됨");
+    if (state == QStringLiteral("Connecting"))   return QStringLiteral("연결 중");
+    if (state == QStringLiteral("SessionOpen"))  return QStringLiteral("연결 중");
+    if (state == QStringLiteral("Reconnecting")) return QStringLiteral("재접속 중");
+    if (state == QStringLiteral("Stalled"))      return QStringLiteral("재접속 중");
+    if (state == QStringLiteral("Failed"))       return QStringLiteral("실패");
+    if (state == QStringLiteral("Idle"))         return QStringLiteral("대기");
+    return state;
+}
+
+static QString channelStatusColor(const QString& state) {
+    if (state == QStringLiteral("Streaming"))    return QStringLiteral("#12823b");
+    if (state == QStringLiteral("Connecting"))   return QStringLiteral("#666");
+    if (state == QStringLiteral("SessionOpen"))  return QStringLiteral("#666");
+    if (state == QStringLiteral("Reconnecting")) return QStringLiteral("#e8a838");
+    if (state == QStringLiteral("Stalled"))      return QStringLiteral("#e8a838");
+    if (state == QStringLiteral("Failed"))       return QStringLiteral("#d13438");
+    return QStringLiteral("#666");
+}
+
 void ChannelListPanel::updateStatus(const QString& channelId, const QString& state) {
     for (int i = 0; i < static_cast<int>(m_configs.size()); ++i) {
         if (QString::fromStdString(m_configs[static_cast<size_t>(i)].id) == channelId) {
             auto* item = m_list->item(i);
             if (item) {
+                const QString displayState = channelStatusText(state);
+                const QString color        = channelStatusColor(state);
                 item->setText(QStringLiteral("%1  [%2]\n%3")
                                   .arg(QString::fromStdString(m_configs[static_cast<size_t>(i)].name),
-                                       state,
+                                       displayState,
                                        QString::fromStdString(m_configs[static_cast<size_t>(i)].url)));
+                item->setForeground(QColor(color));
             }
             break;
         }
