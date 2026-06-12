@@ -183,18 +183,7 @@ void GridView::relayout()
         return;
     }
 
-    // ── 전체 철거 ────────────────────────────────────────────────────────
-    while (auto* item = m_grid->takeAt(0)) {
-        delete item->widget();
-        delete item;
-    }
-    m_tiles.clear();
-
-    // 이전 stretch 리셋
-    const int prevRows = m_grid->rowCount();
-    const int prevCols = m_grid->columnCount();
-    for (int r = 0; r < prevRows; ++r) m_grid->setRowStretch(r, 0);
-    for (int c = 0; c < prevCols; ++c) m_grid->setColumnStretch(c, 0);
+    const QSize cellSize(cellW, cellH);
 
     // ── occupied 맵 구성: gridIndex → config ─────────────────────────────
     // gridIndex가 totalCells 범위 밖이면 비어있는 가장 앞 셀로 fallback
@@ -221,8 +210,8 @@ void GridView::relayout()
         }
     }
 
-    // ── 셀 배치 ──────────────────────────────────────────────────────────
-    const QSize cellSize(cellW, cellH);
+    // ── 셀 배치 — 위젯 파괴 절대 금지; 재배치 + 크기갱신만 ───────────────
+    int placeholderUsed = 0;
 
     for (int i = 0; i < totalCells; ++i) {
         const int r = i / cols;
@@ -231,53 +220,49 @@ void GridView::relayout()
         const nv::domain::ChannelConfig* cfg = occupied.value(i, nullptr);
 
         if (cfg != nullptr) {
-            auto* slot = m_slots ? m_slots->slot(cfg->id) : nullptr;
-            if (slot != nullptr) {
-                auto* tile = new Tile(*slot, cfg->id,
-                                      QString::fromStdString(cfg->name), m_content);
-                tile->setFixedSize(cellSize);
-                m_grid->addWidget(tile, r, c);
-                m_tiles[QString::fromStdString(cfg->id)] = tile;
-
-                connect(tile->video, &VideoTileWidget::framePainted, this,
-                        [this, id = cfg->id] { m_cb.framePainted(id); });
-
-                connect(tile, &QWidget::customContextMenuRequested, this,
-                        [this, tile](const QPoint& p) {
-                    QMenu menu;
-                    menu.setStyleSheet(QStringLiteral(
-                        "QMenu { background-color: #ffffff; color: #1f1f1f; "
-                        "border: 1px solid #c8c8c8; font-size: 12px; }"
-                        "QMenu::item { padding: 6px 20px; }"
-                        "QMenu::item:selected { background-color: #dbeafe; }"));
-                    auto* actEdit   = menu.addAction(QStringLiteral("채널 수정"));
-                    auto* actRetry  = menu.addAction(QStringLiteral("재시도"));
-                    QMenu* swapMenu = menu.addMenu(QStringLiteral("위치 교환"));
-                    for (const auto& other : m_lastConfigs) {
-                        if (other.id == tile->channelId) continue;
-                        swapMenu->addAction(QString::fromStdString(other.name))->setData(
-                            QString::fromStdString(other.id));
-                    }
-                    auto* actRemove = menu.addAction(QStringLiteral("채널 삭제"));
-                    auto* chosen    = menu.exec(tile->mapToGlobal(p));
-                    if (chosen == actEdit)        m_cb.editRequested(tile->channelId);
-                    else if (chosen == actRetry)  m_cb.retryRequested(tile->channelId);
-                    else if (chosen == actRemove) m_cb.removeRequested(tile->channelId);
-                    else if (chosen != nullptr && !chosen->data().isNull())
-                        m_cb.swapRequested(tile->channelId,
-                                           chosen->data().toString().toStdString());
-                });
+            auto* tile = m_tiles.count(QString::fromStdString(cfg->id))
+                             ? m_tiles[QString::fromStdString(cfg->id)]
+                             : nullptr;
+            if (tile != nullptr) {
+                // 레거시 패턴: 이미 해당 위치에 있지 않으면 재배치
+                auto* existing = m_grid->itemAtPosition(r, c);
+                if (!existing || existing->widget() != tile) {
+                    m_grid->addWidget(tile, r, c);
+                }
+                if (tile->size() != cellSize) {
+                    tile->setFixedSize(cellSize);
+                }
+                tile->show();
                 continue;
             }
         }
 
-        // 빈 셀 — 회색 "No Stream" 플레이스홀더 (#ededed, #777 14px)
-        auto* empty = new QLabel(QStringLiteral("No Stream"), m_content);
-        empty->setAlignment(Qt::AlignCenter);
-        empty->setStyleSheet(
-            QStringLiteral("color:#777; font-size:14px; background:#ededed;"));
-        empty->setFixedSize(cellSize);
-        m_grid->addWidget(empty, r, c);
+        // 빈 셀 — 플레이스홀더 풀에서 재사용 (없으면 생성, delete 금지)
+        QLabel* ph = nullptr;
+        if (placeholderUsed < static_cast<int>(m_placeholders.size())) {
+            ph = m_placeholders[placeholderUsed];
+        } else {
+            ph = new QLabel(QStringLiteral("No Stream"), m_content);
+            ph->setAlignment(Qt::AlignCenter);
+            ph->setStyleSheet(
+                QStringLiteral("color:#777; font-size:14px; background:#ededed;"));
+            m_placeholders.push_back(ph);
+        }
+        ++placeholderUsed;
+
+        auto* existing = m_grid->itemAtPosition(r, c);
+        if (!existing || existing->widget() != ph) {
+            m_grid->addWidget(ph, r, c);
+        }
+        if (ph->size() != cellSize) {
+            ph->setFixedSize(cellSize);
+        }
+        ph->show();
+    }
+
+    // 사용하지 않는 플레이스홀더 숨김 (delete 금지 — 풀 유지)
+    for (int i = placeholderUsed; i < static_cast<int>(m_placeholders.size()); ++i) {
+        m_placeholders[i]->hide();
     }
 
     // ── 레거시 gridHeight 방식: m_content 높이를 고정 (뷰포트 채움) ──────
@@ -311,7 +296,70 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
     m_lastConfigs       = configs;
     m_lastManualColumns = manualColumns;
 
-    // 캐시를 무효화해 relayout()이 반드시 재구성하도록 강제
+    // ── diff: configs에 없는 기존 타일 삭제 ─────────────────────────────
+    QSet<QString> newIds;
+    for (const auto& cfg : configs) {
+        newIds.insert(QString::fromStdString(cfg.id));
+    }
+    for (auto it = m_tiles.begin(); it != m_tiles.end(); ) {
+        if (!newIds.contains(it->first)) {
+            delete it->second;
+            it = m_tiles.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // ── diff: 새 채널 타일 생성 + 기존 타일 이름 라벨 갱신 ──────────────
+    for (const auto& cfg : configs) {
+        const QString qId   = QString::fromStdString(cfg.id);
+        const QString qName = QString::fromStdString(cfg.name);
+
+        auto tileIt = m_tiles.find(qId);
+        if (tileIt != m_tiles.end()) {
+            // 기존 타일: 이름만 갱신 (파괴 금지)
+            tileIt->second->name = qName;
+            tileIt->second->nameLabel->setText(qName);
+        } else {
+            // 신규 타일 생성
+            auto* slot = m_slots ? m_slots->slot(cfg.id) : nullptr;
+            if (slot == nullptr) continue;
+
+            auto* tile = new Tile(*slot, cfg.id, qName, m_content);
+            m_tiles[qId] = tile;
+
+            connect(tile->video, &VideoTileWidget::framePainted, this,
+                    [this, id = cfg.id] { m_cb.framePainted(id); });
+
+            connect(tile, &QWidget::customContextMenuRequested, this,
+                    [this, tile](const QPoint& p) {
+                QMenu menu;
+                menu.setStyleSheet(QStringLiteral(
+                    "QMenu { background-color: #ffffff; color: #1f1f1f; "
+                    "border: 1px solid #c8c8c8; font-size: 12px; }"
+                    "QMenu::item { padding: 6px 20px; }"
+                    "QMenu::item:selected { background-color: #dbeafe; }"));
+                auto* actEdit   = menu.addAction(QStringLiteral("채널 수정"));
+                auto* actRetry  = menu.addAction(QStringLiteral("재시도"));
+                QMenu* swapMenu = menu.addMenu(QStringLiteral("위치 교환"));
+                for (const auto& other : m_lastConfigs) {
+                    if (other.id == tile->channelId) continue;
+                    swapMenu->addAction(QString::fromStdString(other.name))->setData(
+                        QString::fromStdString(other.id));
+                }
+                auto* actRemove = menu.addAction(QStringLiteral("채널 삭제"));
+                auto* chosen    = menu.exec(tile->mapToGlobal(p));
+                if (chosen == actEdit)        m_cb.editRequested(tile->channelId);
+                else if (chosen == actRetry)  m_cb.retryRequested(tile->channelId);
+                else if (chosen == actRemove) m_cb.removeRequested(tile->channelId);
+                else if (chosen != nullptr && !chosen->data().isNull())
+                    m_cb.swapRequested(tile->channelId,
+                                       chosen->data().toString().toStdString());
+            });
+        }
+    }
+
+    // 캐시를 무효화해 relayout()이 반드시 재배치하도록 강제
     m_cachedCols  = 0;
     m_cachedRows  = 0;
     m_cachedCellW = 0;

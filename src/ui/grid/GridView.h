@@ -1,8 +1,10 @@
 #pragma once
+#include <QLabel>
 #include <QScrollArea>
 #include <QTimer>
 #include <functional>
 #include <map>
+#include <vector>
 #include "src/domain/channel/ChannelConfig.h"
 
 class QGridLayout;
@@ -13,7 +15,8 @@ namespace nv::infra { class ChannelSourceFactory; }
 namespace nv::ui {
 class VideoTileWidget;
 
-// 채널 타일 그리드. rebuild()로 전체 재구성 (M2a 단순화 — 드래그 스왑은 우클릭 메뉴로 대체).
+// 채널 타일 그리드. rebuild()로 채널 목록 변경 시 diff 갱신, relayout()으로 배치만 갱신.
+// 타일은 영속 — 리사이즈 시 파괴 없음. 플레이스홀더는 hide/show 풀 방식.
 // 컬럼 0 = Auto. 레거시 구조: QScrollArea(수직 스크롤) + m_content(QGridLayout).
 class GridView : public QScrollArea {
     Q_OBJECT
@@ -28,6 +31,7 @@ public:
 
     GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb, QWidget* parent = nullptr);
 
+    // 채널 목록 변경 시 호출: diff 기반 타일 추가/삭제 후 relayout()
     void rebuild(const std::vector<nv::domain::ChannelConfig>& configs, int manualColumns);
     void updateTileStatus(const QString& channelId, const QString& state, int attempts,
                           const QList<int>& stages, double pps, qlonglong msSince,
@@ -37,7 +41,7 @@ protected:
     void resizeEvent(QResizeEvent* ev) override;
 
 private:
-    // Rebuilds with stored configs/manualColumns; resize guard skips if layout unchanged.
+    // 배치만 갱신 — 위젯 파괴 절대 금지
     void relayout();
 
     nv::infra::ChannelSourceFactory* m_slots = nullptr;
@@ -45,7 +49,8 @@ private:
     QWidget*     m_content = nullptr;   // scroll content widget
     QGridLayout* m_grid    = nullptr;
     struct Tile;
-    std::map<QString, Tile*> m_tiles;             // channelId → tile
+    std::map<QString, Tile*> m_tiles;             // channelId → tile (영속)
+    std::vector<QLabel*>     m_placeholders;      // 빈 셀 플레이스홀더 풀 (hide/show)
     std::vector<nv::domain::ChannelConfig> m_lastConfigs;
     int m_lastManualColumns = 0;
 
