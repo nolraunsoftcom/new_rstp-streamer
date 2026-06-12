@@ -2,6 +2,8 @@
 #include "tests/helpers/FakeClock.h"
 #include "tests/helpers/FakeStreamSource.h"
 #include "tests/helpers/FakeLogger.h"
+#include "tests/helpers/FakeChannelRepository.h"
+#include "tests/helpers/FakeRuntimeFactory.h"
 #include "src/infra/system/SteadyClock.h"
 #include "src/infra/system/ProcessStats.h"
 
@@ -17,4 +19,9 @@ TEST_CASE("smoke: 포트와 페이크가 컴파일된다") {
     nv::infra::SteadyClock steady;
     CHECK(steady.now().time_since_epoch().count() != 0);
     CHECK(nv::infra::processRssMb() > 0.0);
+
+    nv::test::FakeChannelRepository repo;
+    CHECK(repo.loadCount == 0);
+    nv::test::FakeRuntimeFactory factory;
+    CHECK(factory.createCount == 0);
 }

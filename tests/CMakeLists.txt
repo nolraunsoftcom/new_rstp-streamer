@@ -1,3 +1,5 @@
+find_package(Qt6 REQUIRED COMPONENTS Core)
+
 include(FetchContent)
 FetchContent_Declare(
   catch2
@@ -15,9 +17,12 @@ add_executable(nv_unit_tests
   unit/LatestFrameSlotTest.cpp
   unit/MarshallingTest.cpp
   unit/SnapshotObserverTest.cpp
+  unit/GridRulesTest.cpp
+  unit/ChannelManagerTest.cpp
+  unit/JsonChannelRepositoryTest.cpp
 )
 target_include_directories(nv_unit_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(nv_unit_tests PRIVATE nv_domain nv_app nv_infra Catch2::Catch2WithMain)
+target_link_libraries(nv_unit_tests PRIVATE nv_domain nv_app nv_infra Catch2::Catch2WithMain Qt6::Core)
 target_compile_options(nv_unit_tests PRIVATE -Wall -Wextra -Wpedantic)
 
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)

@@ -60,6 +60,9 @@ private:
     std::optional<std::chrono::steady_clock::time_point> m_lastPacketAt;
     std::chrono::steady_clock::time_point m_lastRateAt{};
     double m_packetsPerSec = 0.0;
+
+    bool m_loggedDecoded   = false;  // 사이클당 첫 디코딩 로그 가드
+    bool m_loggedPresented = false;  // 사이클당 첫 표시 로그 가드
 };
 
 } // namespace nv::app
