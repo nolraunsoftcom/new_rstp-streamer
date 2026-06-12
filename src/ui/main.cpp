@@ -5,6 +5,7 @@
 #include <QSocketNotifier>
 #include <QStandardPaths>
 #include <QStyleHints>
+#include <QTimer>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -286,6 +287,104 @@ int main(int argc, char** argv) {
     });
 
     win.show();
+
+    // --- QA 스트레스 테스트 CLI 훅 (기본 off — 플래그 없으면 동작 없음) ---
+    // 파싱: --snapshot-every=N, --record-toggle=N (N은 양의 정수, 초 단위)
+    // --auto-record: 각 채널이 Streaming 재도달 시 자동 녹화 시작
+    // --record-toggle=N 과 --auto-record 동시 사용 금지 — record-toggle 우선
+    const QStringList cliArgs = QApplication::arguments();
+
+    const bool qaAutoRecord = cliArgs.contains(QStringLiteral("--auto-record"));
+
+    auto parseIntFlag = [&](const QString& prefix) -> int {
+        for (const QString& arg : cliArgs) {
+            if (arg.startsWith(prefix)) {
+                bool ok = false;
+                const int v = arg.mid(prefix.size()).toInt(&ok);
+                if (ok && v > 0) return v;
+                fprintf(stderr, "[QA] 경고: '%s' 값이 잘못됐습니다(무시됨)\n",
+                        arg.toUtf8().constData());
+            }
+        }
+        return 0;
+    };
+    const int qaSnapshotEvery = parseIntFlag(QStringLiteral("--snapshot-every="));
+    const int qaRecordToggle  = parseIntFlag(QStringLiteral("--record-toggle="));
+
+    // --auto-record: onStreaming 복구 엣지에서 armed 상태 없이 자동 녹화 시작
+    // record-toggle이 있으면 auto-record는 무시
+    if (qaAutoRecord && qaRecordToggle == 0) {
+        fprintf(stderr, "[QA] auto-record on\n");
+        // 기존 snapshotObserver(onStreaming 경로)에 QA 훅을 얹는다.
+        // executor 내부에서만 호출되므로 thread-safe.
+        executor.post([&] {
+            mgr.setSnapshotObserver([&, prevState](const std::string& id,
+                                                    const nv::app::ChannelSnapshot& s) {
+                const auto cur = s.state;
+                auto& prev = (*prevState)[id];
+                const bool enteringReconnect =
+                    (cur == nv::domain::ConnState::Reconnecting ||
+                     cur == nv::domain::ConnState::Stalled) &&
+                    prev != nv::domain::ConnState::Reconnecting &&
+                    prev != nv::domain::ConnState::Stalled;
+                const bool enteringStreaming =
+                    cur == nv::domain::ConnState::Streaming &&
+                    prev != nv::domain::ConnState::Streaming;
+                if (enteringReconnect || enteringStreaming) {
+                    std::string name;
+                    for (const auto& c : mgr.configs()) {
+                        if (c.id == id) { name = c.name; break; }
+                    }
+                    if (enteringReconnect) {
+                        recCtrl.onReconnect(id, name);
+                    }
+                    if (enteringStreaming) {
+                        recCtrl.onStreaming(id, name);
+                        // QA: armed가 아닌 채널도 Streaming 진입 시 자동 녹화 시작
+                        if (recCtrl.stateOf(id) != nv::domain::RecordingState::Recording) {
+                            recCtrl.toggle(id, name);
+                            fprintf(stderr, "[QA] auto-record started ch=%s\n", id.c_str());
+                        }
+                    }
+                }
+                prev = cur;
+                bridge.publish(QString::fromStdString(id), s);
+            });
+        });
+    }
+
+    // --snapshot-every=N: N초마다 전 채널 스냅샷 (UI 스레드 타이머 → executor.post)
+    if (qaSnapshotEvery > 0) {
+        auto* snapTimer = new QTimer(&app);
+        snapTimer->setInterval(qaSnapshotEvery * 1000);
+        QObject::connect(snapTimer, &QTimer::timeout, [&] {
+            executor.post([&] {
+                fprintf(stderr, "[QA] snapshot tick\n");
+                for (const auto& c : mgr.configs()) {
+                    const std::string path = nv::infra::RecordingPaths::snapshotPath(c.name);
+                    snapSvc.capture(c.id, c.name, path);
+                }
+            });
+        });
+        snapTimer->start();
+    }
+
+    // --record-toggle=N: N초마다 전 채널 녹화 토글 (UI 스레드 타이머 → executor.post)
+    if (qaRecordToggle > 0) {
+        auto* toggleTimer = new QTimer(&app);
+        toggleTimer->setInterval(qaRecordToggle * 1000);
+        QObject::connect(toggleTimer, &QTimer::timeout, [&] {
+            executor.post([&] {
+                for (const auto& c : mgr.configs()) {
+                    fprintf(stderr, "[QA] record toggle ch=%s\n", c.id.c_str());
+                    recCtrl.toggle(c.id, c.name);
+                }
+            });
+        });
+        toggleTimer->start();
+    }
+    // --- QA 훅 끝 ---
+
     const bool autoConnect = QApplication::arguments().contains(QStringLiteral("--connect"));
     executor.post([&, autoConnect] { mgr.restore(autoConnect); });
 
