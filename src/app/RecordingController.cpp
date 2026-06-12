@@ -1,6 +1,7 @@
 #include "RecordingController.h"
 
 #include <chrono>
+#include <cstdio>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
@@ -43,8 +44,6 @@ std::string RecordingController::makePath(const std::string& channelName) const 
     // 타임스탬프: chrono time_point → time_t → localtime → strftime
     const auto tp = m_clock.now();
     // steady_clock은 time_t 변환 불가 → system_clock 기준 오프셋으로 조회.
-    // 테스트에서는 경로 내용보다 비어있지 않음만 검증하므로 실시간 대신
-    // 단조 카운터를 사용해도 무방하지만, 실용성을 위해 system_clock을 직접 쓴다.
     // (steady_clock epoch는 구현 정의라 time_t 변환 불가 — system_clock 사용.)
     (void)tp;  // makePath는 system_clock을 직접 호출해 타임스탬프를 생성
     const std::time_t t = std::chrono::system_clock::to_time_t(
@@ -59,6 +58,14 @@ std::string RecordingController::makePath(const std::string& channelName) const 
     char ts[20];
     std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &tm_buf);
 
+    // D2 충돌 방지: 같은 초 안의 stop→start(롤오버/재연결)는 동일 타임스탬프라 경로가
+    // 겹쳐 avio_open이 직전 세그먼트를 0바이트로 truncate한다. 단조 증가 시퀀스를 접미사로
+    // 붙여 같은 초라도 항상 다른 경로를 보장한다(..._HHmmss_NNN). 시퀀스는 컨트롤러 수명 동안
+    // 단조 증가 — control 스레드 단일 호출이라 atomic 불필요(단순 멤버).
+    const unsigned seq = m_pathSeq++;
+    char seqbuf[8];
+    std::snprintf(seqbuf, sizeof(seqbuf), "_%03u", seq % 1000);
+
     // 저장 디렉토리: 환경변수 NV_RECORD_DIR 또는 빈 문자열(cwd 상대).
     // 실제 앱은 infra가 main()에서 NV_RECORD_DIR을 QStandardPaths로 채워 줘도 되고,
     // ChannelSourceFactory::startRecording이 경로를 덮어써도 된다.
@@ -69,7 +76,7 @@ std::string RecordingController::makePath(const std::string& channelName) const 
         if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') dir += '/';
     }
 
-    return dir + sanitizeName(channelName) + '_' + ts + ".mkv";
+    return dir + sanitizeName(channelName) + '_' + ts + seqbuf + ".mkv";
 }
 
 void RecordingController::notify(const std::string& channelId, nv::domain::RecordingState s) {
@@ -143,8 +150,28 @@ void RecordingController::tick() {
     const auto now = m_clock.now();
     for (auto& [id, ch] : m_channels) {
         if (ch.state != nv::domain::RecordingState::Recording) continue;
+
         const auto elapsed =
             std::chrono::duration_cast<std::chrono::seconds>(now - ch.segmentStart);
+
+        // D3 수렴(reconciliation): sink.startRecording 성공은 래치 설정일 뿐,
+        // 디코드 스레드의 FfmpegRecorder::start가 실패하면 sink는 녹화를 닫고
+        // isRecording==false가 되지만 컨트롤러는 영원히 Recording이라 UI REC 뱃지가
+        // 거짓으로 남는다. 컨트롤러가 Recording인데 sink가 더 이상 녹화 중이 아니면
+        // Idle로 수렴 + 경고 로그 + 옵저버 통지(UI REC 해제)한다.
+        //
+        // 유예(kReconcileGrace): 디코드 스레드는 다음 키프레임에서야 레코더를 연다 →
+        // start 직후 첫 tick에는 sink.isRecording이 아직 false일 수 있다(정상 비동기 지연).
+        // 유예 시간 안에는 수렴하지 않아 거짓 해제를 막는다. 유예 후에도 false면 진짜 실패.
+        static constexpr std::chrono::seconds kReconcileGrace{3};
+        if (elapsed >= kReconcileGrace && !m_sink.isRecording(id)) {
+            m_logger.log(LogLevel::Warn, id, "RecordingController",
+                         "녹화 중이라 표시됐으나 sink는 비녹화 — Idle로 수렴(REC 해제)");
+            ch.state = nv::domain::RecordingState::Idle;
+            notify(id, nv::domain::RecordingState::Idle);
+            continue;
+        }
+
         if (elapsed >= m_policy.maxDuration) {
             // 롤오버: stop + 새 경로로 start
             m_sink.stopRecording(id);

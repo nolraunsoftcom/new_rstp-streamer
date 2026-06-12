@@ -145,13 +145,15 @@ void FfmpegStreamSource::close() {
 
 bool FfmpegStreamSource::startRecording(const std::string& outputPath) {
     if (outputPath.empty()) return false;
-    // 이미 녹화 중이거나 시작 요청이 걸려 있으면 거절(중복 방지).
-    if (m_recording.load() || m_recordRequested.load()) return false;
+    // D1: 이미 녹화 중이어도 거절하지 않는다. 새 경로를 pending으로 갱신하고 요청 래치를
+    // 올리면, 디코드 스레드의 serviceRecording이 pendingPath != currentPath를 감지해
+    // 현재 세그먼트를 마감(finish)하고 새 경로로 재start한다. 즉 finish/start의 직렬 수행을
+    // 디코드 스레드가 단독으로 소유 → control 스레드의 stop→start 래치 경합이 사라진다.
     {
         std::lock_guard lk(m_recMu);
         m_pendingPath = outputPath;
     }
-    m_recordRequested.store(true);   // 디코드 스레드가 다음 키프레임에서 레코더를 연다
+    m_recordRequested.store(true);   // 디코드 스레드가 다음 키프레임에서 레코더를 연다/전환한다
     return true;
 }
 
@@ -175,14 +177,23 @@ void FfmpegStreamSource::serviceRecording(AVStream* inputStream, const AVPacket*
         return;
     }
 
-    // 시작 요청인데 아직 레코더가 없으면 — 입력 stream으로 새로 start.
+    std::string path;
+    {
+        std::lock_guard lk(m_recMu);
+        path = m_pendingPath;
+    }
+    if (path.empty()) return;
+
+    // D1 세그먼트 전환: 레코더가 열려 있는데 요청 경로가 현재 경로와 다르면, 현재 세그먼트를
+    // 마감(trailer)하고 새 경로로 다시 연다(다음 키프레임부터 새 세그먼트). control 스레드는
+    // 경로만 바꿨고 실제 finish→start는 여기(디코드 스레드)에서 직렬로 일어난다 → 래치 경합 없음.
+    if (m_recorder && path != m_currentPath) {
+        finishRecorder();
+    }
+
+    // 시작 요청인데 아직 레코더가 없으면(최초 start 또는 전환 직후) — 입력 stream으로 새로 start.
     if (!m_recorder) {
-        std::string path;
-        {
-            std::lock_guard lk(m_recMu);
-            path = m_pendingPath;
-        }
-        if (path.empty() || inputStream == nullptr) return;
+        if (inputStream == nullptr) return;
         auto rec = std::make_unique<FfmpegRecorder>();
         if (!rec->start(path, inputStream)) {
             // 격리: 시작 실패는 이 채널 녹화만 포기. 디코드는 영향 없음.
@@ -196,6 +207,7 @@ void FfmpegStreamSource::serviceRecording(AVStream* inputStream, const AVPacket*
             return;
         }
         m_recorder = std::move(rec);
+        m_currentPath = path;
         m_recording.store(true);
     }
 
@@ -210,6 +222,7 @@ void FfmpegStreamSource::finishRecorder() {
         m_recorder->stop();
         m_recorder.reset();
     }
+    m_currentPath.clear();
     m_recording.store(false);
 }
 

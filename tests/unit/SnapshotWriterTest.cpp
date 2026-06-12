@@ -2,9 +2,11 @@
 // 실제 PNG 파일을 생성해 헤더 매직과 비어있지 않음을 검증한다(Fake 슬롯 RGBA → PNG).
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -95,12 +97,20 @@ TEST_CASE("ChannelSourceFactory: 슬롯 RGBA 있으면 snapshot true, 없으면 
     // 아직 프레임 발행 전 — RGBA 비어 false.
     CHECK_FALSE(factory.snapshot("cam1", out));
 
-    // 슬롯에 RGBA 발행 후 — true + 실제 PNG.
+    // 슬롯에 RGBA 발행 후 — true(디스패치 성공) + 실제 PNG가 곧 생성된다.
+    // D4: PNG 인코딩/저장은 control 스레드 블로킹을 피해 워커 스레드로 떼어냈으므로
+    // snapshot() 반환 직후에는 파일이 아직 없을 수 있다 — 잠깐 폴링해 생성을 확인한다.
     const int w = 8, h = 8;
     const auto px = solidRgba(w, h, 10, 20, 30);
+    ::remove(out.c_str());
     factory.slot("cam1")->publishCpu(w, h, px.data());
-    CHECK(factory.snapshot("cam1", out));
-    CHECK(isPng(out));
+    CHECK(factory.snapshot("cam1", out));   // RGBA 존재 → 디스패치 성공
+    bool wrote = false;
+    for (int i = 0; i < 200 && !wrote; ++i) {
+        wrote = isPng(out);
+        if (!wrote) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(wrote);
 
     ::remove(out.c_str());
 }
@@ -117,8 +127,9 @@ TEST_CASE("ChannelSourceFactory: 녹화 위임 — 살아있는 소스 없으면
     // 소스 생성 후 — open 전이라 demux 스레드 없음. startRecording은 요청 래치만 세우고 true.
     auto src = factory.createSource("cam1");
     CHECK(factory.startRecording("cam1", RecordingPaths::recordingPath("cam1")));
-    // 중복 요청은 false.
-    CHECK_FALSE(factory.startRecording("cam1", RecordingPaths::recordingPath("cam1")));
+    // D1: 녹화 중 새 경로 요청은 거절이 아니라 세그먼트 전환 요청 — 항상 수락(true).
+    // (디코드 스레드가 pendingPath != currentPath를 감지해 전환하지만, 여기선 demux 미가동.)
+    CHECK(factory.startRecording("cam1", RecordingPaths::recordingPath("cam1")));
     factory.stopRecording("cam1");
     CHECK_FALSE(factory.isRecording("cam1"));
 

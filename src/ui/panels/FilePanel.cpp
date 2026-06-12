@@ -4,6 +4,8 @@
 #include <QFileInfo>
 #include <QFileInfoList>
 #include <QHBoxLayout>
+#include <QImage>
+#include <QImageReader>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -104,12 +106,9 @@ void FilePanel::refresh()
         // 아이콘
         QIcon icon;
         if (isPng) {
-            QPixmap thumb(fi.absoluteFilePath());
-            if (!thumb.isNull()) {
-                icon = QIcon(thumb.scaled(kThumbSize, kThumbSize,
-                                          Qt::KeepAspectRatio,
-                                          Qt::SmoothTransformation));
-            }
+            // D5: 풀 디코드 대신 QImageReader::setScaledSize로 썸네일 크기로만 디코드하고,
+            // 경로+수정시각 캐시로 이미 만든 썸네일을 재사용한다.
+            icon = thumbnailFor(fi.absoluteFilePath(), fi.lastModified().toSecsSinceEpoch());
         }
         if (icon.isNull()) {
             // 텍스트 아이콘 폴백 (MKV 또는 PNG 로드 실패)
@@ -147,6 +146,27 @@ void FilePanel::refresh()
     if (!m_watcher.directories().contains(m_baseDir)) {
         m_watcher.addPath(m_baseDir);
     }
+}
+
+QIcon FilePanel::thumbnailFor(const QString& absPath, qint64 mtimeEpoch)
+{
+    // 캐시 키: 경로 + 수정시각. 파일이 같은 경로로 갱신되면 mtime이 달라져 재디코드된다.
+    const QString key = absPath + QLatin1Char('|') + QString::number(mtimeEpoch);
+    const auto it = m_thumbCache.constFind(key);
+    if (it != m_thumbCache.constEnd()) return it.value();
+
+    // 축소 디코드: 원본을 풀 디코드하지 않고 썸네일 크기로 직접 디코드한다(메모리/시간 절약).
+    QImageReader reader(absPath);
+    reader.setScaledSize(QSize(kThumbSize, kThumbSize));
+    reader.setAutoTransform(true);
+    const QImage img = reader.read();
+
+    QIcon icon;
+    if (!img.isNull()) {
+        icon = QIcon(QPixmap::fromImage(img));
+        m_thumbCache.insert(key, icon);   // 성공한 썸네일만 캐시(실패는 폴백 아이콘 사용)
+    }
+    return icon;
 }
 
 void FilePanel::openItem(int row)

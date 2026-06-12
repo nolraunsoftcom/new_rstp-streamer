@@ -267,6 +267,121 @@ TEST_CASE("onChannelRemoved: ch1 삭제가 ch2 녹화에 영향 없음") {
     CHECK(f.sink.stopCount == 1);   // ch1 stop만
 }
 
+// ── D2: 파일명 충돌 방지(같은 초 stop→start도 다른 경로) ─────────────────────
+
+TEST_CASE("D2: 같은 시각 연속 녹화는 서로 다른 경로를 생성한다(truncate 방지)") {
+    Fixture f;
+    // FakeClock은 고정 시각이라 두 start의 초 단위 타임스탬프가 동일하다.
+    // 단조 시퀀스 접미사 덕분에 경로는 달라야 한다.
+    f.ctrl.toggle("ch1", "Cam1");   // start 1
+    f.ctrl.toggle("ch1", "Cam1");   // stop
+    f.ctrl.toggle("ch1", "Cam1");   // start 2 (같은 시각)
+
+    REQUIRE(f.sink.startCalls.size() == 2);
+    CHECK_FALSE(f.sink.startCalls[0].outputPath.empty());
+    CHECK_FALSE(f.sink.startCalls[1].outputPath.empty());
+    CHECK(f.sink.startCalls[0].outputPath != f.sink.startCalls[1].outputPath);
+}
+
+TEST_CASE("D2: 롤오버 두 세그먼트 경로가 서로 다르다(같은 시각이라도)") {
+    FakeClock clock;
+    FakeRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{60}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    ctrl.toggle("ch1", "Cam1");        // start 1 (시각 T0)
+    clock.advance(std::chrono::seconds{60});
+    ctrl.tick();                       // 롤오버 → start 2 (시각 T0+60, 초가 같을 수도)
+
+    REQUIRE(sink.startCalls.size() == 2);
+    CHECK(sink.startCalls[0].outputPath != sink.startCalls[1].outputPath);
+}
+
+// ── D3: REC 표시 수렴(reconciliation) ───────────────────────────────────────
+
+namespace {
+// startRecording 성공으로 래치는 올리지만 isRecording은 외부에서 강제로 false로
+// 만들 수 있는 페이크 — 디코드 스레드 start 실패(래치만 내려감) 상황을 모사한다.
+class FlakyRecordingSink final : public nv::app::IRecordingSink {
+public:
+    bool startRecording(const std::string& channelId,
+                        const std::string& outputPath) override {
+        m_recording[channelId] = !forceNotRecording;
+        startCalls.push_back({channelId, outputPath});
+        ++startCount;
+        return true;   // 컨트롤러 관점에선 성공(래치 설정)
+    }
+    void stopRecording(const std::string& channelId) override {
+        m_recording[channelId] = false;
+        ++stopCount;
+    }
+    bool isRecording(const std::string& channelId) const override {
+        auto it = m_recording.find(channelId);
+        return it != m_recording.end() && it->second;
+    }
+    struct StartCall { std::string channelId; std::string outputPath; };
+    bool forceNotRecording = false;   // true면 start 후에도 isRecording==false
+    std::vector<StartCall> startCalls;
+    int startCount = 0;
+    int stopCount  = 0;
+private:
+    std::unordered_map<std::string, bool> m_recording;
+};
+} // namespace
+
+TEST_CASE("D3 수렴: Recording인데 sink가 비녹화면 유예 후 tick에서 Idle로 수렴 + 통지") {
+    FakeClock clock;
+    FlakyRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{600}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    std::vector<std::pair<std::string, RecordingState>> events;
+    ctrl.setObserver([&](const std::string& id, RecordingState s) {
+        events.push_back({id, s});
+    });
+
+    sink.forceNotRecording = true;     // 디코드 스레드 start 실패 모사(래치만 올라감)
+    ctrl.toggle("ch1", "Cam1");        // 컨트롤러는 Recording(start 성공 래치)
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    // 유예(3초) 전 tick — 아직 수렴하지 않는다(비동기 지연 허용)
+    clock.advance(std::chrono::seconds{2});
+    ctrl.tick();
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    // 유예 후 tick — Idle로 수렴
+    clock.advance(std::chrono::seconds{2});
+    ctrl.tick();
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Idle);
+
+    // Idle 통지가 발생해야 한다(UI REC 해제)
+    const bool idleNotified = std::any_of(events.begin(), events.end(),
+        [](const auto& e){ return e.second == RecordingState::Idle; });
+    CHECK(idleNotified);
+
+    // 경고 로그
+    const bool hasWarn = std::any_of(logger.entries.begin(), logger.entries.end(),
+        [](const auto& e){ return e.level == nv::app::LogLevel::Warn; });
+    CHECK(hasWarn);
+}
+
+TEST_CASE("D3 수렴: sink가 정상 녹화 중이면 tick에서 수렴하지 않는다") {
+    FakeClock clock;
+    FlakyRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{600}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    ctrl.toggle("ch1", "Cam1");        // 정상 — isRecording==true
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    clock.advance(std::chrono::seconds{10});
+    ctrl.tick();
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Recording);   // 수렴 없음
+}
+
 // ── 옵저버 통지 ──────────────────────────────────────────────────────────────
 
 TEST_CASE("옵저버: toggle 시 상태 변화를 통지한다") {

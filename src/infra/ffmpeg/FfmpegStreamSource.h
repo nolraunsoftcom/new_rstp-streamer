@@ -43,7 +43,11 @@ public:
     // 격리(D8): 레코더 writePacket 실패는 그 레코더만 오류 상태로 둘 뿐 디코드 루프를
     // 멈추지 않는다(FfmpegRecorder가 예외를 던지지 않음).
 
-    // 녹화 시작 요청. 다음 키프레임부터 outputPath로 기록한다. 이미 요청/녹화 중이면 false.
+    // 녹화 시작/세그먼트 전환 요청. 다음 키프레임부터 outputPath로 기록한다.
+    // 이미 녹화 중이어도 거절하지 않고 새 경로를 pending으로 받아 디코드 스레드가
+    // serviceRecording에서 현재 세그먼트를 마감(finish)하고 새 경로로 재start한다
+    // (전환을 디코드 스레드 단일 소유로 — control 스레드 stop→start 래치 경합 제거, D1).
+    // outputPath가 비면 false.
     bool startRecording(const std::string& outputPath);
     // 녹화 중지 요청. 디코드 루프가 다음 반복에서 레코더를 stop/소멸한다.
     void stopRecording();
@@ -71,6 +75,8 @@ private:
     std::atomic<bool> m_recordRequested{false}; // 시작 요청 래치
     std::atomic<bool> m_recording{false};       // 디코드 스레드가 레코더를 연 상태
     std::unique_ptr<FfmpegRecorder> m_recorder; // 디코드 스레드 전용 소유(락 불필요)
+    std::string m_currentPath;                  // 디코드 스레드 전용: 현재 레코더가 쓰는 경로
+                                                // (m_pendingPath와 다르면 세그먼트 전환, D1)
 };
 
 } // namespace nv::infra

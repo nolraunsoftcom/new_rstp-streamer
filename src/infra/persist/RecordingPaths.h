@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QStandardPaths>
 #include <QString>
+#include <atomic>
 #include <string>
 
 namespace nv::infra {
@@ -54,8 +55,15 @@ private:
     }
 
     static std::string makePath(const std::string& channelName, const char* ext) {
-        const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+        // D2 충돌 방지: 초 단위 타임스탬프만으로는 같은 초의 stop→start(롤오버)나 연속
+        // 스냅샷이 동일 경로가 되어 직전 파일을 덮어쓴다. 밀리초(zzz) + 프로세스 단조
+        // 카운터를 붙여 같은 초·같은 밀리초라도 항상 다른 경로를 보장한다.
+        static std::atomic<unsigned> s_seq{0};
+        const QString ts =
+            QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
+        const unsigned seq = s_seq.fetch_add(1, std::memory_order_relaxed) % 1000;
         const QString file = sanitize(channelName) + QLatin1Char('_') + ts +
+                             QStringLiteral("_%1").arg(seq, 3, 10, QLatin1Char('0')) +
                              QLatin1Char('.') + QLatin1String(ext);
         QDir dir(QString::fromStdString(baseDir()));
         return dir.filePath(file).toStdString();

@@ -1,6 +1,9 @@
 #include "ChannelSourceFactory.h"
 
 #include <cstdio>
+#include <thread>
+#include <utility>
+#include <vector>
 
 #include "src/infra/persist/PngSnapshotWriter.h"
 
@@ -103,13 +106,24 @@ bool ChannelSourceFactory::snapshot(const std::string& channelId,
     }
     // 슬롯의 최신 RGBA(오버레이 없는 디코딩 원본). lastSeq=0이라 항상 현재 프레임을 받는다.
     // 순수 GPU 경로로 RGBA가 비면 width/height가 0이거나 rgba가 비어 false.
+    // latest()가 frame.rgba에 깊은 복사를 채우므로 이 시점에서 슬롯 버퍼와는 분리돼 있다.
     LatestSurfaceSlot::Frame frame;
     if (!s->latest(frame, 0) || frame.rgba.empty() || frame.width <= 0 || frame.height <= 0) {
         std::fprintf(stderr, "[ChannelSourceFactory] snapshot: 프레임 RGBA 없음 (%s)\n",
                      channelId.c_str());
         return false;
     }
-    return PngSnapshotWriter::write(outputPath, frame.width, frame.height, frame.rgba.data());
+
+    // D4 비블로킹: PNG 압축(QImage::copy + 인코딩 + 디스크 쓰기)은 무겁다 — control 스레드에서
+    // 직접 하면 전 채널 tick이 정지한다. RGBA 복사는 이미 latest()에서 끝났으므로, 인코딩/저장은
+    // 별도 워커 스레드로 떼어낸다(detach). frame.rgba를 워커로 move해 호출자 버퍼와 분리한다.
+    // 반환값은 "디스패치 성공"이라 항상 true — 실제 저장 실패는 워커가 stderr 로그로 남긴다.
+    // (FilePanel의 QFileSystemWatcher가 저장 완료를 잡아 목록을 갱신한다.)
+    std::thread([path = outputPath, w = frame.width, h = frame.height,
+                 rgba = std::move(frame.rgba)]() mutable {
+        PngSnapshotWriter::write(path, w, h, rgba.data());
+    }).detach();
+    return true;
 }
 
 LatestSurfaceSlot* ChannelSourceFactory::slot(const std::string& channelId) {

@@ -1,6 +1,9 @@
 #pragma once
 #include <QWidget>
 #include <QFileSystemWatcher>
+#include <QHash>
+#include <QIcon>
+#include <QString>
 
 class QListWidget;
 class QLabel;
@@ -25,12 +28,17 @@ private:
     void setupUi();
     void openItem(int row);
 
+    // PNG 썸네일 캐시: 경로+수정시각으로 키를 만들어 이미 축소 디코드한 아이콘을 재사용한다.
+    // (D5: 매 refresh마다 모든 PNG를 풀 디코드하면 파일이 쌓일수록 UI가 멈춘다.)
+    QIcon thumbnailFor(const QString& absPath, qint64 mtimeEpoch);
+
     QString      m_baseDir;
     QLabel*      m_dirLabel    = nullptr;
     QPushButton* m_refreshBtn  = nullptr;
     QListWidget* m_list        = nullptr;
 
     QFileSystemWatcher m_watcher;
+    QHash<QString, QIcon> m_thumbCache;   // 키: "<absPath>|<mtimeEpoch>" → 축소 아이콘
 };
 
 } // namespace nv::ui

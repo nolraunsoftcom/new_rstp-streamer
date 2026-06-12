@@ -63,3 +63,24 @@
 | 25 | 녹화 시작 실패 명시 알림 | 시작 실패가 Warn 로그 + ●버튼 미점등뿐 — 토스트/상태바 명시 알림 미구현(#18과 묶임) | M4 (UI 알림) |
 | 26 | 통합테스트 픽스처 GOP 의존 | 픽스처를 1초 키프레임으로 안정화(중간 합류 flaky 제거) — 단, 통합테스트가 여전히 고정 sleep 사용(#3)이라 매우 느린 CI에선 잔여 flaky 소지 | CI 도입 시(#3과 묶음) |
 | 27 | 주기 롤오버(maxDuration) tick 미배선 | `RecordingController::tick`(10분 세그먼트 롤오버)이 main 루프에 미배선 — onReconnect 분리만 배선됨. 장시간 단일 세그먼트가 커질 수 있음 | M4 (장시간 녹화 운영) |
+
+## M3 결함 수정 2차 (2026-06-13, 녹화 리뷰 D1~D5)
+
+해소:
+
+| 결함 | 내용 | 수정 |
+|---|---|---|
+| D1 | stop→start 래치 경합으로 세그먼트 롤오버 실패 | **해소** — `FfmpegStreamSource::startRecording`이 녹화 중에도 거절하지 않고 새 경로를 pending으로 수락. 디코드 스레드 `serviceRecording`이 `pendingPath != currentPath`를 감지해 finish→재start(세그먼트 전환을 디코드 스레드 단일 소유). control 스레드 래치 경합 제거. 통합테스트 #157(stop·유예 없는 즉시 전환) 추가 |
+| D2 | 같은 초 파일명 충돌 → 직전 세그먼트 truncate | **해소** — `RecordingController::makePath`에 단조 시퀀스(`_NNN`), `RecordingPaths::makePath`에 밀리초(`_zzz`)+프로세스 단조 카운터 추가. 단위테스트 2종 추가 |
+| D3 | REC 표시 불일치(디코드 스레드 start 실패 시 컨트롤러 영구 Recording) | **해소** — `tick()`에서 `sink.isRecording`과 컨트롤러 상태 대조, Recording인데 sink 비녹화면(유예 3초 후) Idle 수렴 + 경고 로그 + 옵저버 통지. 단위테스트 2종 추가 |
+| D4 | 스냅샷 PNG 인코딩이 control 스레드 블로킹 | **해소** — `ChannelSourceFactory::snapshot`이 RGBA 복사(latest)까지만 control 스레드, PNG 인코딩·저장은 detach 워커 스레드로 분리 |
+| D5 | FilePanel 썸네일 풀 디코드로 UI 멈춤 | **해소** — `QImageReader::setScaledSize`로 축소 디코드 + 경로+mtime 캐시(`QHash`) 재사용 |
+| (debt) | writePacket 오류 후 패킷마다 재시도+로그 스팸 | **해소** — `m_errored`면 조기 반환 |
+
+남은 부채(이번에 보류):
+
+| # | 항목 | 내용 | 해소 시점 |
+|---|---|---|---|
+| 28 | 음수 dts (avoid_negative_ts 의존) | FfmpegRecorder가 첫 키프레임 pts를 0으로 당기지만 B프레임 dts가 음수일 수 있어 muxer 기본(avoid_negative_ts=auto)에 의존. 명시 설정/주석 미정 | M4 |
+| 29 | RecordingState::Stopping 미사용 / sanitizeName 중복 | enum의 Stopping 상태 미사용(Idle/Recording만), 채널명 살균 로직이 RecordingController(std)와 RecordingPaths(Qt)에 중복. 정리 보류 | 정리 라운드 |
+| (기존 #25) | 디스크 용량 관리 부재 | 회전/상한 없음 | M4 |

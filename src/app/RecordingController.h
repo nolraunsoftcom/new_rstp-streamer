@@ -65,6 +65,9 @@ private:
     nv::domain::SegmentPolicy    m_policy;
     std::map<std::string, ChannelRec> m_channels;
     RecordingObserver            m_observer;
+    // D2: 같은 초 stop→start 경로 충돌 방지용 단조 시퀀스(makePath가 const라 mutable).
+    // control 스레드 단일 호출이므로 atomic 불필요.
+    mutable unsigned             m_pathSeq{0};
 };
 
 } // namespace nv::app

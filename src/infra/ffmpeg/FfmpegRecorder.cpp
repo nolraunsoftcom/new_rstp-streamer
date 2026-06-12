@@ -78,6 +78,9 @@ bool FfmpegRecorder::start(const std::string& path, const AVStream* inputVideoSt
 
 void FfmpegRecorder::writePacket(const AVPacket* pkt) {
     if (!m_open || m_fmt == nullptr || pkt == nullptr) return;
+    // 부채 해소: 한 번 쓰기 오류가 나면 이후 패킷도 거의 확실히 실패한다 — 매 패킷 재시도하면
+    // av_interleaved_write_frame 실패 + stderr 로그가 폭주한다(로그 스팸). 오류 상태면 조기 반환.
+    if (m_errored) return;
 
     // 첫 패킷은 키프레임이어야 한다 — 키프레임 전 패킷은 드랍(remux 디코드 불가 방지).
     if (!m_gotKeyframe) {
