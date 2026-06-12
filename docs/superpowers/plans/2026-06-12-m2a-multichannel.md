@@ -10,6 +10,10 @@
 
 **기준 부하 (사용자 확정):** H.264 640x480@30fps × 20채널, MediaMTX + ffmpeg publish 시뮬레이션.
 
+**추가 요구 (2026-06-12 사용자):**
+1. **UI 패리티** — 인터페이스는 기존 `../viewer/`와 동일해야 한다. 앱명 **"영상관리시스템"**, 아이콘(`logo.icns/ico/png`), 좌측 채널 패널 + 중앙 "전체" 탭 그리드(검정 배경) + 우측 고정폭 패널(설정/파일/로그 탭, #f5f5f5) + 패널 토글 버튼 + 상태바(채널 집계·CPU·메모리) 구조 그대로. 구현 시 `../viewer/src/MainWindow.cpp`와 `../viewer/src/Style.h`를 **시각적 레퍼런스로 직접 읽고** 이식하되, 비즈니스 로직은 절대 가져오지 않는다(룩앤필만 — 로직은 새 아키텍처).
+2. **채널 수 정책** — 20은 하드 한도가 아니라 **성능 보장 기준선**이다. 소프트 한도 32(생성자 주입으로 조정 가능), 20채널은 성능 게이트로 보장, 21~32는 동작 보장+성능 best-effort(M2b HW 디코딩 후 재평가).
+
 **브랜치:** `m2a-multichannel` (main에서 분기)
 
 ---
@@ -352,12 +356,25 @@ TEST_CASE("목록 변경 옵저버: add/remove/swap에서 통지") {
     CHECK(notified == 4);
 }
 
-TEST_CASE("20채널 한도: 초과 addChannel은 빈 id 반환 + 무동작") {
+TEST_CASE("소프트 한도: maxChannels 초과 addChannel은 빈 id 반환 + 무동작") {
+    FakeChannelRepository repo;
+    FakeRuntimeFactory factory;
+    FakeClock clock;
+    FakeLogger logger;
+    ChannelManager small{repo, factory, clock, logger,
+                         ReconnectPolicy{}, StallPolicy{}, /*maxChannels=*/2};
+    small.addChannel("a", "rtsp://a");
+    small.addChannel("b", "rtsp://b");
+    CHECK(small.channelCount() == 2);
+    CHECK(small.addChannel("over", "rtsp://y").empty());
+    CHECK(small.channelCount() == 2);
+}
+
+TEST_CASE("기본 한도는 32 (성능 기준선 20과 별개)") {
     Fixture f;
-    for (int i = 0; i < 20; ++i) f.mgr.addChannel("c", "rtsp://x");
-    CHECK(f.mgr.channelCount() == 20);
+    for (int i = 0; i < 32; ++i) CHECK_FALSE(f.mgr.addChannel("c", "rtsp://x").empty());
     CHECK(f.mgr.addChannel("over", "rtsp://y").empty());
-    CHECK(f.mgr.channelCount() == 20);
+    CHECK(f.mgr.channelCount() == 32);
 }
 ```
 
@@ -380,11 +397,13 @@ namespace nv::app {
 // 채널 독립(설계 R2): 한 채널의 추가/삭제/장애가 다른 채널의 소스·컨트롤러를 건드리지 않는다.
 class ChannelManager {
 public:
-    static constexpr int kMaxChannels = 20;
+    static constexpr int kPerformanceTargetChannels = 20;  // 성능 게이트 기준선 (M2b)
+    static constexpr int kDefaultMaxChannels = 32;         // 소프트 한도 (주입으로 조정 가능)
 
     ChannelManager(IChannelRepository& repo, IChannelRuntimeFactory& factory,
                    const IClock& clock, ILogger& logger,
-                   nv::domain::ReconnectPolicy reconnect, nv::domain::StallPolicy stall);
+                   nv::domain::ReconnectPolicy reconnect, nv::domain::StallPolicy stall,
+                   int maxChannels = kDefaultMaxChannels);
 
     void restore(bool autoConnect);                        // 저장본 로드 (시작 시 1회)
     std::string addChannel(std::string name, std::string url);   // 실패(한도) 시 "" 반환
@@ -424,6 +443,7 @@ private:
     nv::domain::StallPolicy m_stall;
     std::map<std::string, Entry> m_entries;        // id → entry
     std::function<void()> m_listChanged;
+    int m_maxChannels;
 };
 
 } // namespace nv::app
@@ -442,9 +462,9 @@ using nv::domain::ChannelConfig;
 ChannelManager::ChannelManager(IChannelRepository& repo, IChannelRuntimeFactory& factory,
                                const IClock& clock, ILogger& logger,
                                nv::domain::ReconnectPolicy reconnect,
-                               nv::domain::StallPolicy stall)
+                               nv::domain::StallPolicy stall, int maxChannels)
     : m_repo(repo), m_factory(factory), m_clock(clock), m_logger(logger),
-      m_reconnect(reconnect), m_stall(stall) {}
+      m_reconnect(reconnect), m_stall(stall), m_maxChannels(maxChannels) {}
 
 ChannelManager::Entry& ChannelManager::makeEntry(ChannelConfig cfg) {
     auto source = m_factory.createSource(cfg.id);
@@ -457,7 +477,7 @@ ChannelManager::Entry& ChannelManager::makeEntry(ChannelConfig cfg) {
 
 void ChannelManager::restore(bool autoConnect) {
     for (auto& cfg : m_repo.load()) {
-        if (channelCount() >= kMaxChannels) break;
+        if (channelCount() >= m_maxChannels) break;
         makeEntry(cfg);
     }
     if (autoConnect) connectAll();
@@ -484,7 +504,7 @@ int ChannelManager::nextIdNumber() const {
 }
 
 std::string ChannelManager::addChannel(std::string name, std::string url) {
-    if (channelCount() >= kMaxChannels) return {};
+    if (channelCount() >= m_maxChannels) return {};
     ChannelConfig cfg;
     cfg.id = "ch" + std::to_string(nextIdNumber());
     cfg.name = std::move(name);
@@ -806,9 +826,21 @@ LatestFrameSlot* ChannelSourceFactory::slot(const std::string& channelId) {
 
 ---
 
-### Task 6: ControlBridge 다채널화 + GridView + ChannelDialog + MainWindow 개편
+### Task 6: ControlBridge 다채널화 + GridView + ChannelDialog + **레거시 UI 패리티 셸**
 
-**Files:** Modify `src/ui/shell/ControlBridge.h`, `src/ui/shell/MainWindow.h/.cpp`, `src/ui/main.cpp`; Create `src/ui/grid/GridView.h/.cpp`, `src/ui/channels/ChannelDialog.h/.cpp`; Modify `src/CMakeLists.txt`(nv_ui 소스)
+**Files:** Modify `src/ui/shell/ControlBridge.h`, `src/ui/shell/MainWindow.h/.cpp`, `src/ui/main.cpp`, 루트/`src/CMakeLists.txt`; Create `src/ui/grid/GridView.h/.cpp`, `src/ui/channels/ChannelDialog.h/.cpp`, `src/ui/channels/ChannelListPanel.h/.cpp`, `src/ui/shell/LogPanel.h/.cpp`, `src/infra/system/ResourceMonitor.h/.cpp`(레거시 이식), `resources/`(레거시 복사)
+
+- [ ] **Step 0 — 레거시 패리티 필수 작업 (아래 스니펫들의 외피. `../viewer/src/MainWindow.cpp`·`Style.h`를 직접 읽고 룩앤필을 이식하되 로직은 가져오지 말 것):**
+
+1. **리소스/아이덴티티**: `../viewer/resources/`(logo.icns/ico/png, resources.qrc, app.rc.in)를 `resources/`로 복사. CMake: qrc 추가(AUTORCC ON), macOS `MACOSX_BUNDLE` + icns(`MACOSX_PACKAGE_LOCATION Resources` + `MACOSX_BUNDLE_ICON_FILE`). main.cpp: `app.setApplicationName(QStringLiteral("영상관리시스템")); app.setWindowIcon(QIcon(":/logo.png"));` 윈도우 타이틀도 "영상관리시스템".
+2. **3패널 레이아웃** (레거시 159~210행 구조): 좌측 채널 패널(`ChannelListPanel`) + 토글버튼 + 중앙 `QTabWidget`("전체" 탭에 GridView, pane 검정 배경 스타일시트 — 레거시 617~653행) + 토글버튼 + 우측 고정폭(`RIGHT_PANEL_WIDTH=320`) 패널(#f5f5f5).
+3. **ChannelListPanel** (레거시 좌측 사이드바 대응): `QListWidget` — 항목에 채널명+상태 요약 표시, 선택/우클릭 메뉴(채널 수정/삭제/재시도 — GridView Callbacks 재사용), 하단 [추가]/[삭제] 버튼. 스냅샷 수신 시 해당 항목 상태 텍스트 갱신.
+4. **우측 패널 탭 3개**: ① 설정 탭 — 그리드 컬럼 콤보(Auto/1~5) 이동 배치, ② 파일 탭 — 자리표시(빈 목록 + "스냅샷/녹화는 M3에서") , ③ 로그 탭 — `LogPanel`(QPlainTextEdit, 최대 2000줄 유지).
+5. **로그 탭 배선**: `src/infra/system/CompositeLogger.h` 추가 — ILogger 구현, StderrLogger로 위임 + `std::function<void(QString)>` 콜백 호출(있으면). main.cpp에서 콜백→`QMetaObject::invokeMethod`(queued)→LogPanel append. (control/어댑터 스레드에서 호출되므로 반드시 queued)
+6. **상태바** (레거시 하단 대응): 채널 집계("연결 n / 전체 m") + 시스템 CPU/메모리 — `../viewer/src/ResourceMonitor.cpp`(233줄)를 `src/infra/system/ResourceMonitor.h/.cpp`로 이식(네임스페이스 nv::infra로, Qt Core 타이머 기반 그대로). 1초 주기 갱신.
+7. 패널 토글 동작: 좌/우 각각 독립 숨김/표시, 토글 후 그리드 재계산 (레거시 685~700행 동작 동일).
+
+이하 Step 1~7의 스니펫은 이 셸 안에 들어가는 부품이다 — MainWindow 스니펫의 단순 툴바 구성 대신 위 3패널 구조를 적용하고, 컬럼 콤보는 우측 설정 탭으로 이동하라.
 
 - [ ] **Step 1: `src/ui/shell/ControlBridge.h`** — 시그널에 channelId 추가:
 
@@ -1453,9 +1485,16 @@ echo "saved: $OUT"
 
 전제: `./ops/sim-20ch.sh` 가동, viewer 실행.
 
+## UI 패리티 (기존 viewer와 비교하며 확인)
+- [ ] 앱명 "영상관리시스템" + 로고 아이콘 (창/독)
+- [ ] 좌측 채널 패널: 목록·상태 요약·우클릭 메뉴·추가/삭제 버튼, 토글 동작
+- [ ] 중앙 "전체" 탭 그리드 (검정 배경), 우측 패널: 설정(컬럼)/파일(자리표시)/로그 탭, 토글 동작
+- [ ] 상태바: 채널 집계 + CPU/메모리 갱신
+- [ ] 로그 탭에 상태 전이 실시간 표시 (최대 2000줄 롤링)
+
 ## 기능
 - [ ] 채널 추가 20개 (sim1~sim20) — 전 타일 영상 + 채널별 패킷 표시 동작
-- [ ] 21번째 추가 시도 → 거부됨 (한도 20)
+- [ ] 33번째 추가 시도 → 거부됨 (소프트 한도 32; 성능 보장선은 20)
 - [ ] Auto 컬럼: 1개=1열, 4개=2열, 9개=3열, 16개=4열, 20개=5열 / 수동 1~5열 전환
 - [ ] 채널 수정(이름/URL) → 즉시 반영, 해당 채널만 재연결
 - [ ] 채널 삭제 → 해당 타일만 제거, **다른 채널 영상 끊김 없음** (R2 채널 독립)
