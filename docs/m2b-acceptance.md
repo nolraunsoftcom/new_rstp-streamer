@@ -176,3 +176,11 @@ NV_FORCE_SW=1 ./build/new_viewer.app/Contents/MacOS/new_viewer --connect 2>&1 | 
 - RSS는 Metal 텍스처 버퍼로 +13%(302→342MB) — 수용 범위.
 - 색 정상(NV12 BT.601 video-range 변환 검증), 끊김 0, 유령 0, render path = "NV12 zero-copy" 로그 확인.
 - **판정: 성능 게이트 PASS** — HW 디코딩 + GPU 직행 렌더로 20채널 CPU를 SW 대비 절반 가까이 절감.
+
+---
+
+## M2 전체 안정성 점검 (2026-06-13)
+
+- **코드 리뷰**(`docs/.omc 리뷰`): 스레딩/수명 설계 견고 평가. MEDIUM 결함 2건 수정(`e0602d1`): close() 타임드 join(control 스레드 wedge 방지), 슬롯 자원 해제(누수 #8). LOW(순차종료 20s)는 타임드 join으로 무한 hang 차단 후 부채 #24.
+- **실장비 소크 13분**: 끊김 0, 크래시 0, wedge-detach 0, NV12 zero-copy 렌더 안정. 정상 종료 0.15s.
+- 테스트 100단위 + 6통합. 판정: **M2 안정성 PASS**.
