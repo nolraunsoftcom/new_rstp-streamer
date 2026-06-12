@@ -24,7 +24,7 @@ public:
         std::function<void(std::string idA, std::string idB)> swapRequested;
     };
 
-    GridView(nv::infra::ChannelSourceFactory* slots, Callbacks cb, QWidget* parent = nullptr);
+    GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb, QWidget* parent = nullptr);
 
     void rebuild(const std::vector<nv::domain::ChannelConfig>& configs, int manualColumns);
     void updateTileStatus(const QString& channelId, const QString& state, int attempts,

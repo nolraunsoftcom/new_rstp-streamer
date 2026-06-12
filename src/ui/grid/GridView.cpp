@@ -40,8 +40,10 @@ struct GridView::Tile : public QWidget {
     }
 };
 
-GridView::GridView(nv::infra::ChannelSourceFactory* slots, Callbacks cb, QWidget* parent)
-    : QWidget(parent), m_slots(slots), m_cb(std::move(cb)) {
+GridView::GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb, QWidget* parent)
+    // 주의: 파라미터명에 "slots"를 쓰면 Qt 키워드 매크로가 빈 토큰으로 치환해
+    // 무명 파라미터 + m_slots() 빈 초기화가 되어 조용히 nullptr가 된다 (실제 발생 버그).
+    : QWidget(parent), m_slots(slotRegistry), m_cb(std::move(cb)) {
     setStyleSheet(QStringLiteral("background-color: black;"));
     m_grid = new QGridLayout(this);
     m_grid->setSpacing(1);
