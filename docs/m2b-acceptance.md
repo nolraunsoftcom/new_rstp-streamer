@@ -161,3 +161,18 @@ NV_FORCE_SW=1 ./build/new_viewer.app/Contents/MacOS/new_viewer --connect 2>&1 | 
 
 ### 판정
 20채널 **HW 디코딩 활성·전 채널 안정 표시·HW<SW 입증**으로 기능·안정성 게이트 PASS. 절대 CPU 목표(zero-copy)는 후속 성능 작업.
+
+---
+
+## M2c zero-copy 실측 (2026-06-13, 동일 머신·20채널 시뮬)
+
+| 경로 | 디코드 | 렌더 | CPU | RSS | 표시 | Stalled |
+|---|---|---|---|---|---|---|
+| **zero-copy (M2c)** | VideoToolbox | NV12→Metal 직행 | **92.6%** | 341.9MB | 20/20 | 0 |
+| 동반-rgba (M2b) | VideoToolbox | GPU→CPU→RGBA→재업로드 | 131.3% | 301.8MB | 20/20 | 0 |
+| SW | libavcodec | RGBA | 162.6% | 250.5MB | 20/20 | 0 |
+
+- **zero-copy가 M2b 동반-rgba 대비 CPU 29% 절감**(131→93), SW 대비 43% 절감. GPU→CPU 왕복·sws·재업로드 제거 효과.
+- RSS는 Metal 텍스처 버퍼로 +13%(302→342MB) — 수용 범위.
+- 색 정상(NV12 BT.601 video-range 변환 검증), 끊김 0, 유령 0, render path = "NV12 zero-copy" 로그 확인.
+- **판정: 성능 게이트 PASS** — HW 디코딩 + GPU 직행 렌더로 20채널 CPU를 SW 대비 절반 가까이 절감.
