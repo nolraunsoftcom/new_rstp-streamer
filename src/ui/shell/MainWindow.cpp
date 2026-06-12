@@ -15,6 +15,7 @@
 #include "src/ui/channels/ChannelListPanel.h"
 #include "src/ui/grid/GridView.h"
 #include "src/ui/shell/LogPanel.h"
+#include "src/ui/panels/FilePanel.h"
 
 namespace nv::ui {
 
@@ -186,17 +187,9 @@ MainWindow::MainWindow(GridView* grid, ChannelListPanel* channelPanel, LogPanel*
     settingsLayout->addStretch();
     m_rightTabs->addTab(settingsTab, QStringLiteral("설정"));
 
-    // ② 파일 탭 — 자리표시자
-    auto* filesTab = new QWidget();
-    auto* filesLayout = new QVBoxLayout(filesTab);
-    filesLayout->setContentsMargins(12, 12, 12, 12);
-    auto* filesPlaceholder = new QLabel(
-        QStringLiteral("스냅샷/녹화는 M3에서 구현 예정"), filesTab);
-    filesPlaceholder->setAlignment(Qt::AlignCenter);
-    filesPlaceholder->setStyleSheet(QStringLiteral("color: #999; font-size: 12px;"));
-    filesLayout->addWidget(filesPlaceholder);
-    filesLayout->addStretch();
-    m_rightTabs->addTab(filesTab, QStringLiteral("파일"));
+    // ② 파일 탭 — M3-5: FilePanel (녹화/스냅샷 목록)
+    m_filePanel = new FilePanel(rightPanel);
+    m_rightTabs->addTab(m_filePanel, QStringLiteral("파일"));
 
     // ③ 로그 탭
     logPanel->setParent(rightPanel);
@@ -371,6 +364,16 @@ void MainWindow::updateToggleButtons() {
         btn->setText(m_rightVisible ? QStringLiteral("▶") : QStringLiteral("◀"));
         btn->setToolTip(m_rightVisible ? QStringLiteral("오른쪽 패널 숨기기")
                                        : QStringLiteral("오른쪽 패널 보이기"));
+    }
+}
+
+void MainWindow::onRecordingState(QString channelId, bool recording)
+{
+    // 타일 정보바 ● 버튼 색 + REC 뱃지 갱신
+    m_grid->updateRecordingState(channelId, recording);
+    // 녹화 중지 시 파일 패널 갱신 (새 MKV 파일이 생겼을 수 있음)
+    if (!recording && m_filePanel) {
+        m_filePanel->refresh();
     }
 }
 

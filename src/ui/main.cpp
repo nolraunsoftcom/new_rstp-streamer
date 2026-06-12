@@ -11,8 +11,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include "src/app/ChannelManager.h"
+#include "src/app/RecordingController.h"
+#include "src/app/SnapshotService.h"
+#include "src/domain/recording/RecordingState.h"
 #include "src/infra/ffmpeg/ChannelSourceFactory.h"
 #include "src/infra/persist/JsonChannelRepository.h"
+#include "src/infra/persist/RecordingPaths.h"
 #include "src/infra/system/CompositeLogger.h"
 #include "src/infra/system/ControlExecutor.h"
 #include "src/infra/system/SoakLogger.h"
@@ -64,6 +68,15 @@ int main(int argc, char** argv) {
                                 nv::domain::ReconnectPolicy{}, nv::domain::StallPolicy{}};
     mgrPtr.store(&mgr);
 
+    // M3-5: RecordingController + SnapshotService (control 스레드에서만 호출)
+    // NV_RECORD_DIR을 RecordingPaths::baseDir()로 설정해 컨트롤러 경로와 일치
+    const std::string recBaseDir = nv::infra::RecordingPaths::baseDir();
+    if (std::getenv("NV_RECORD_DIR") == nullptr) {
+        qputenv("NV_RECORD_DIR", QByteArray::fromStdString(recBaseDir));
+    }
+    nv::app::RecordingController recCtrl(factory, clock, logger);
+    nv::app::SnapshotService snapSvc(factory, logger);
+
     // --- UI ---
     nv::ui::ControlBridge bridge;
 
@@ -98,6 +111,35 @@ int main(int argc, char** argv) {
     };
     gridCb.editRequested = [&](std::string id) {
         if (winPtr != nullptr) winPtr->openEditDialog(id);
+    };
+    // M3-5: 📷 스냅샷 버튼 — control 스레드로 post
+    gridCb.snapshotRequested = [&](std::string id) {
+        executor.post([&, id] {
+            // 채널 이름 조회
+            std::string name;
+            for (const auto& c : mgr.configs()) {
+                if (c.id == id) { name = c.name; break; }
+            }
+            const std::string path = nv::infra::RecordingPaths::snapshotPath(name);
+            snapSvc.capture(id, name, path);
+            // 스냅샷 후 파일 패널 갱신 (queued — UI 스레드)
+            if (winPtr != nullptr) {
+                QMetaObject::invokeMethod(winPtr, "onRecordingState",
+                    Qt::QueuedConnection,
+                    Q_ARG(QString, QString::fromStdString(id)),
+                    Q_ARG(bool, recCtrl.stateOf(id) == nv::domain::RecordingState::Recording));
+            }
+        });
+    };
+    // M3-5: ● 녹화 토글 버튼 — control 스레드로 post
+    gridCb.recordToggleRequested = [&](std::string id) {
+        executor.post([&, id] {
+            std::string name;
+            for (const auto& c : mgr.configs()) {
+                if (c.id == id) { name = c.name; break; }
+            }
+            recCtrl.toggle(id, name);
+        });
     };
     auto* grid = new nv::ui::GridView(static_cast<nv::app::IFrameSurfaceRegistry*>(&factory), gridCb, repaintClock);
 
@@ -166,6 +208,16 @@ int main(int argc, char** argv) {
         mgr.setListChangedObserver(pushList);
         mgr.setSnapshotObserver([&bridge](const std::string& id, const nv::app::ChannelSnapshot& s) {
             bridge.publish(QString::fromStdString(id), s);
+        });
+        // M3-5: RecordingController 옵저버 — 상태 변화 시 UI 스레드로 queued 전달
+        recCtrl.setObserver([&](const std::string& id, nv::domain::RecordingState state) {
+            const bool rec = (state == nv::domain::RecordingState::Recording);
+            if (winPtr != nullptr) {
+                QMetaObject::invokeMethod(winPtr, "onRecordingState",
+                    Qt::QueuedConnection,
+                    Q_ARG(QString, QString::fromStdString(id)),
+                    Q_ARG(bool, rec));
+            }
         });
     });
 

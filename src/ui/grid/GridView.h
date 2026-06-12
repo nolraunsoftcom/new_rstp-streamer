@@ -28,6 +28,9 @@ public:
         std::function<void(std::string id)> retryRequested;
         std::function<void(std::string id)> framePainted;
         std::function<void(std::string idA, std::string idB)> swapRequested;
+        // M3-5: 정보바 버튼 콜백
+        std::function<void(std::string id)> snapshotRequested;
+        std::function<void(std::string id)> recordToggleRequested;
     };
 
     GridView(nv::app::IFrameSurfaceRegistry* registry, Callbacks cb,
@@ -38,6 +41,8 @@ public:
     void updateTileStatus(const QString& channelId, const QString& state, int attempts,
                           const QList<int>& stages, double pps, qlonglong msSince,
                           const QString& reason);
+    // M3-5: 녹화 상태 변경 → 정보바 ● 버튼 + REC 뱃지 갱신
+    void updateRecordingState(const QString& channelId, bool recording);
 
 protected:
     void resizeEvent(QResizeEvent* ev) override;
