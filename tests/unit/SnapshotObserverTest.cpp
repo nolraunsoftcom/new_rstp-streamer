@@ -68,6 +68,29 @@ TEST_CASE("수신 이력이 없으면 msSinceLastPacket은 -1") {
     CHECK(snaps.back().msSinceLastPacket == -1);
 }
 
+TEST_CASE("첫 프레임 디코딩/표시가 사이클당 1회 로그된다") {
+    FakeClock clock;
+    FakeStreamSource source;
+    FakeLogger logger;
+    ChannelController ctrl{"ch1", "rtsp://u", source, clock, logger,
+                           ReconnectPolicy{}, StallPolicy{}};
+    ctrl.connect();
+    auto* l = source.listener();
+    l->onSessionOpened();
+    l->onPacketReceived();
+    l->onFrameDecoded();
+    l->onFrameDecoded();
+    l->onFramePresented();
+    l->onFramePresented();
+    int decoded = 0, presented = 0;
+    for (auto& e : logger.entries) {
+        if (e.message == "first frame decoded")    ++decoded;
+        if (e.message == "first frame presented")  ++presented;
+    }
+    CHECK(decoded   == 1);
+    CHECK(presented == 1);
+}
+
 TEST_CASE("setUrl은 Idle에서만 적용된다") {
     FakeClock clock;
     FakeStreamSource source;

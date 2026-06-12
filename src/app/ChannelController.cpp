@@ -23,6 +23,8 @@ void ChannelController::apply(const Transition& t) {
         case Action::OpenSource:
             m_health.reset();
             m_sourceAlive = true;
+            m_loggedDecoded   = false;
+            m_loggedPresented = false;
             m_source.open(m_url, *this);
             break;
         case Action::CloseSource:
@@ -138,6 +140,11 @@ void ChannelController::onPacketReceived() {
 void ChannelController::onFrameDecoded() {
     if (!m_sourceAlive) return;
     m_health.markReached(HealthStage::Decoding);   // 상태머신 전이 없음 — 진단 전용
+    if (!m_loggedDecoded) {
+        m_loggedDecoded = true;
+        m_logger.log(LogLevel::Info, m_channelId, "ChannelController",
+                     "first frame decoded", m_sm.lastReason());
+    }
     notifyIfChanged();
 }
 
@@ -145,6 +152,11 @@ void ChannelController::onFramePresented() {
     if (!m_sourceAlive) return;
     apply(m_sm.framePresented(m_clock.now()));
     m_health.markReached(HealthStage::Presenting);
+    if (!m_loggedPresented) {
+        m_loggedPresented = true;
+        m_logger.log(LogLevel::Info, m_channelId, "ChannelController",
+                     "first frame presented", m_sm.lastReason());
+    }
     notifyIfChanged();
 }
 

@@ -58,52 +58,79 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
     }
     m_tiles.clear();
 
-    const int n = static_cast<int>(configs.size());
+    const int n    = static_cast<int>(configs.size());
     const int cols = manualColumns > 0 ? manualColumns : nv::domain::grid::autoColumns(n);
+    const int rows = nv::domain::grid::rowsFor(n, cols);
 
-    int cell = 0;
-    for (const auto& cfg : configs) {
-        auto* slot = m_slots ? m_slots->slot(cfg.id) : nullptr;
-        if (slot == nullptr) continue;
-        auto* tile = new Tile(*slot, cfg.id, QString::fromStdString(cfg.name), this);
-        m_grid->addWidget(tile, cell / cols, cell % cols);
-        m_tiles[QString::fromStdString(cfg.id)] = tile;
-        ++cell;
+    // 이전 rebuild에서 남은 stretch를 먼저 0으로 리셋한다.
+    // QGridLayout은 stretch 0인 행/열을 균등 배분에서 제외하지 않으므로
+    // 실제 사용하는 행/열에만 1을 부여하고 나머지는 명시적으로 0으로 둔다.
+    const int prevRows = m_grid->rowCount();
+    const int prevCols = m_grid->columnCount();
+    for (int r = 0; r < prevRows; ++r) m_grid->setRowStretch(r, 0);
+    for (int c = 0; c < prevCols; ++c) m_grid->setColumnStretch(c, 0);
 
-        connect(tile->video, &VideoTileWidget::framePainted, this,
-                [this, id = cfg.id] { m_cb.framePainted(id); });
-        connect(tile, &QWidget::customContextMenuRequested, this, [this, tile](const QPoint& p) {
-            QMenu menu;
-            menu.setStyleSheet(QStringLiteral(
-                "QMenu { background-color: #ffffff; color: #1f1f1f; "
-                "border: 1px solid #c8c8c8; font-size: 12px; }"
-                "QMenu::item { padding: 6px 20px; }"
-                "QMenu::item:selected { background-color: #dbeafe; }"));
-            auto* actEdit   = menu.addAction(QStringLiteral("채널 수정"));
-            auto* actRetry  = menu.addAction(QStringLiteral("재시도"));
-            QMenu* swapMenu = menu.addMenu(QStringLiteral("위치 교환"));
-            for (const auto& other : m_lastConfigs) {
-                if (other.id == tile->channelId) continue;
-                swapMenu->addAction(QString::fromStdString(other.name))->setData(
-                    QString::fromStdString(other.id));
+    // 균등 분배: 사용하는 모든 행/열에 동일 stretch
+    for (int r = 0; r < rows; ++r) m_grid->setRowStretch(r, 1);
+    for (int c = 0; c < cols; ++c) m_grid->setColumnStretch(c, 1);
+
+    // rows×cols 전체 셀을 채운다 (채널이 있으면 Tile, 없으면 회색 플레이스홀더)
+    int chanIdx = 0;
+    const int totalCells = rows * cols;
+    for (int cell = 0; cell < totalCells; ++cell) {
+        const int r = cell / cols;
+        const int c = cell % cols;
+
+        if (chanIdx < n) {
+            const auto& cfg = configs[static_cast<std::size_t>(chanIdx)];
+            auto* slot = m_slots ? m_slots->slot(cfg.id) : nullptr;
+            if (slot != nullptr) {
+                auto* tile = new Tile(*slot, cfg.id, QString::fromStdString(cfg.name), this);
+                tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+                m_grid->addWidget(tile, r, c);
+                m_tiles[QString::fromStdString(cfg.id)] = tile;
+
+                connect(tile->video, &VideoTileWidget::framePainted, this,
+                        [this, id = cfg.id] { m_cb.framePainted(id); });
+                connect(tile, &QWidget::customContextMenuRequested, this,
+                        [this, tile](const QPoint& p) {
+                    QMenu menu;
+                    menu.setStyleSheet(QStringLiteral(
+                        "QMenu { background-color: #ffffff; color: #1f1f1f; "
+                        "border: 1px solid #c8c8c8; font-size: 12px; }"
+                        "QMenu::item { padding: 6px 20px; }"
+                        "QMenu::item:selected { background-color: #dbeafe; }"));
+                    auto* actEdit   = menu.addAction(QStringLiteral("채널 수정"));
+                    auto* actRetry  = menu.addAction(QStringLiteral("재시도"));
+                    QMenu* swapMenu = menu.addMenu(QStringLiteral("위치 교환"));
+                    for (const auto& other : m_lastConfigs) {
+                        if (other.id == tile->channelId) continue;
+                        swapMenu->addAction(QString::fromStdString(other.name))->setData(
+                            QString::fromStdString(other.id));
+                    }
+                    auto* actRemove = menu.addAction(QStringLiteral("채널 삭제"));
+                    auto* chosen    = menu.exec(tile->mapToGlobal(p));
+                    if (chosen == actEdit)        m_cb.editRequested(tile->channelId);
+                    else if (chosen == actRetry)  m_cb.retryRequested(tile->channelId);
+                    else if (chosen == actRemove) m_cb.removeRequested(tile->channelId);
+                    else if (chosen != nullptr && !chosen->data().isNull())
+                        m_cb.swapRequested(tile->channelId,
+                                           chosen->data().toString().toStdString());
+                });
+                ++chanIdx;
+                continue;
             }
-            auto* actRemove = menu.addAction(QStringLiteral("채널 삭제"));
-            auto* chosen    = menu.exec(tile->mapToGlobal(p));
-            if (chosen == actEdit)        m_cb.editRequested(tile->channelId);
-            else if (chosen == actRetry)  m_cb.retryRequested(tile->channelId);
-            else if (chosen == actRemove) m_cb.removeRequested(tile->channelId);
-            else if (chosen != nullptr && !chosen->data().isNull())
-                m_cb.swapRequested(tile->channelId, chosen->data().toString().toStdString());
-        });
-    }
+        }
 
-    if (n == 0) {
-        auto* empty = new QLabel(
-            QStringLiteral("채널이 없습니다 — [채널 추가]를 누르세요"), this);
+        // 빈 셀 — 회색 플레이스홀더
+        auto* empty = new QLabel(QStringLiteral("No Stream"), this);
         empty->setAlignment(Qt::AlignCenter);
         empty->setStyleSheet(
-            QStringLiteral("color: #aaaaaa; font-size: 14px; background: black;"));
-        m_grid->addWidget(empty, 0, 0);
+            QStringLiteral("color:#777; font-size:13px; background:#ededed;"));
+        empty->setMinimumSize(160, 120);
+        empty->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        m_grid->addWidget(empty, r, c);
+        if (chanIdx < n) ++chanIdx;  // slot이 null인 채널도 셀 하나 소비
     }
 }
 
