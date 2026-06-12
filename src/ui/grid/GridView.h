@@ -6,13 +6,12 @@
 #include <map>
 #include <string>
 #include <vector>
+#include "src/app/ports/IFrameSurfaceRegistry.h"
 #include "src/domain/channel/ChannelConfig.h"
 #include "src/ui/shell/RepaintClock.h"
 
 class QGridLayout;
 class QWidget;
-
-namespace nv::infra { class ChannelSourceFactory; }
 
 namespace nv::ui {
 class VideoTileWidget;
@@ -31,7 +30,7 @@ public:
         std::function<void(std::string idA, std::string idB)> swapRequested;
     };
 
-    GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb,
+    GridView(nv::app::IFrameSurfaceRegistry* registry, Callbacks cb,
              RepaintClock& repaintClock, QWidget* parent = nullptr);
 
     // 채널 목록 변경 시 호출: diff 기반 타일 추가/삭제 후 relayout()
@@ -47,7 +46,7 @@ private:
     // 배치만 갱신 — 위젯 파괴 절대 금지
     void relayout();
 
-    nv::infra::ChannelSourceFactory* m_slots = nullptr;
+    nv::app::IFrameSurfaceRegistry* m_registry = nullptr;
     Callbacks m_cb;
     RepaintClock& m_repaintClock;
     QWidget*     m_content = nullptr;   // scroll content widget

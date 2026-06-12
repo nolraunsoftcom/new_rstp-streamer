@@ -17,6 +17,7 @@
 #include "src/infra/system/ControlExecutor.h"
 #include "src/infra/system/SoakLogger.h"
 #include "src/infra/system/SteadyClock.h"
+#include "src/infra/video/VtMetalBridge.h"  // M2c Task2 컴파일/링크 확인용(호출은 Task3). 헤더만 참조.
 #include "src/ui/channels/ChannelListPanel.h"
 #include "src/ui/grid/GridView.h"
 #include "src/ui/shell/ControlBridge.h"
@@ -98,7 +99,7 @@ int main(int argc, char** argv) {
     gridCb.editRequested = [&](std::string id) {
         if (winPtr != nullptr) winPtr->openEditDialog(id);
     };
-    auto* grid = new nv::ui::GridView(&factory, gridCb, repaintClock);
+    auto* grid = new nv::ui::GridView(static_cast<nv::app::IFrameSurfaceRegistry*>(&factory), gridCb, repaintClock);
 
     // ChannelListPanel callbacks
     nv::ui::ChannelListPanel::Callbacks panelCb;

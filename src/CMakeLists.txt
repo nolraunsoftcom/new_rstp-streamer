@@ -52,8 +52,15 @@ else()
 endif()
 
 # macOS: VideoToolbox HW 디코딩 — CVPixelBuffer 수명 관리에 CoreVideo 필요.
+# + VtMetalBridge(.mm, Obj-C++): CVPixelBuffer(NV12)→Metal 2-plane 텍스처(zero-copy, M2c).
+#   Metal/CoreVideo/Foundation 프레임워크 링크. 비-Apple은 .mm 제외(헤더만 — Obj-C++는
+#   Apple 전용이라 컴파일 불가; VtMetalBridge 호출측이 아직 없어 심볼 누락 없음).
 if(APPLE)
-  target_link_libraries(nv_infra PUBLIC "-framework CoreVideo")
+  target_sources(nv_infra PRIVATE infra/video/VtMetalBridge.mm)
+  target_link_libraries(nv_infra PUBLIC
+    "-framework CoreVideo"
+    "-framework Metal"
+    "-framework Foundation")
 endif()
 
 set(CMAKE_AUTORCC ON)
@@ -85,6 +92,7 @@ qt6_add_shaders(nv_ui "nv_ui_shaders"
   FILES
     ui/render/texture.vert
     ui/render/texture.frag
+    ui/render/nv12.frag
 )
 
 # macOS バンドル アイコン
