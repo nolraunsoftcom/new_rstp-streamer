@@ -24,6 +24,7 @@
 #include "src/ui/channels/ChannelListPanel.h"
 #include "src/ui/grid/GridView.h"
 #include "src/ui/shell/ControlBridge.h"
+#include "src/ui/shell/RepaintClock.h"
 #include "src/ui/shell/LogPanel.h"
 #include "src/ui/shell/MainWindow.h"
 
@@ -69,6 +70,9 @@ int main(int argc, char** argv) {
                                   Q_ARG(QString, text));
     });
 
+    // 앱 전체 단일 repaint 타이머 — 타일별 30Hz 타이머(20ch=600Hz) 대신 1개
+    nv::ui::RepaintClock repaintClock;
+
     // GridView callbacks
     nv::ui::MainWindow* winPtr = nullptr;
     nv::ui::GridView::Callbacks gridCb;
@@ -91,7 +95,7 @@ int main(int argc, char** argv) {
     gridCb.editRequested = [&](std::string id) {
         if (winPtr != nullptr) winPtr->openEditDialog(id);
     };
-    auto* grid = new nv::ui::GridView(&factory, gridCb);
+    auto* grid = new nv::ui::GridView(&factory, gridCb, repaintClock);
 
     // ChannelListPanel callbacks
     nv::ui::ChannelListPanel::Callbacks panelCb;

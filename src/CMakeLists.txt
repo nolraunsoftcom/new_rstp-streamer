@@ -38,6 +38,7 @@ add_library(nv_ui STATIC
   ui/channels/ChannelListPanel.cpp
   ui/shell/LogPanel.cpp
   ui/shell/ControlBridge.h
+  ui/shell/RepaintClock.h
   ${CMAKE_SOURCE_DIR}/resources/resources.qrc
 )
 target_include_directories(nv_ui PUBLIC ${CMAKE_SOURCE_DIR})

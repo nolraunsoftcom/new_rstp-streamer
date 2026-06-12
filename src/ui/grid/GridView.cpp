@@ -120,8 +120,10 @@ struct GridView::Tile : public QWidget {
 
 // ─────────────────────────────────────────────────────────────────────────
 
-GridView::GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb, QWidget* parent)
-    : QScrollArea(parent), m_slots(slotRegistry), m_cb(std::move(cb))
+GridView::GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb,
+                   RepaintClock& repaintClock, QWidget* parent)
+    : QScrollArea(parent), m_slots(slotRegistry), m_cb(std::move(cb)),
+      m_repaintClock(repaintClock)
 {
     // 레거시 스크롤 영역 설정: 수직 스크롤 항상 표시(viewport 폭 진동 방지), 수평 없음, 프레임 없음, 검정 배경
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
@@ -332,6 +334,10 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
 
             auto* tile = new Tile(*slot, cfg.id, qName, m_content);
             m_tiles[qId] = tile;
+
+            // 단일 RepaintClock tick에 pollFrame 연결 (자체 타이머 없음)
+            connect(&m_repaintClock, &RepaintClock::tick,
+                    tile->video, &VideoTileWidget::pollFrame);
 
             connect(tile->video, &VideoTileWidget::framePainted, this,
                     [this, id = cfg.id] { m_cb.framePainted(id); });

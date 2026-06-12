@@ -6,8 +6,7 @@ namespace nv::ui {
 VideoTileWidget::VideoTileWidget(nv::infra::LatestFrameSlot& slot, QWidget* parent)
     : QWidget(parent), m_slot(slot) {
     setMinimumSize(320, 240);
-    connect(&m_timer, &QTimer::timeout, this, &VideoTileWidget::pollFrame);
-    m_timer.start(33);   // ~30Hz
+    // 자체 타이머 없음 — 외부 RepaintClock::tick에 pollFrame()을 연결해 사용한다.
 }
 
 void VideoTileWidget::pollFrame() {
