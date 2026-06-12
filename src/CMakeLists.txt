@@ -6,6 +6,7 @@ target_compile_options(nv_domain PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(nv_app STATIC
   app/ChannelController.cpp
+  app/ChannelManager.cpp
 )
 target_include_directories(nv_app PUBLIC ${CMAKE_SOURCE_DIR})
 target_link_libraries(nv_app PUBLIC nv_domain)
