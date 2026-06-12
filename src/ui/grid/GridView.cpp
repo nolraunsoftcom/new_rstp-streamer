@@ -1,4 +1,5 @@
 #include "GridView.h"
+#include <algorithm>
 #include <set>
 #include <QFrame>
 #include <QGridLayout>
@@ -14,6 +15,7 @@
 #include "src/infra/ffmpeg/ChannelSourceFactory.h"
 #include "src/infra/video/LatestSurfaceSlot.h"
 #include "src/ui/grid/VideoTileWidget.h"
+#include "src/ui/common/Confirm.h"
 
 namespace nv::ui {
 
@@ -172,7 +174,7 @@ void GridView::relayout()
 
     // 셀 크기
     const int cellW    = qMax(1, (viewportWidth - (cols - 1) * kGridSpacing) / cols);
-    const int leftover = viewportWidth - (cellW * cols + (cols - 1) * kGridSpacing);
+    const int leftover = std::max(0, viewportWidth - (cellW * cols + (cols - 1) * kGridSpacing));  // F2: 음수 방지
     const int cellH    = cellW * 3 / 4 + kInfoBarHeight;
 
     // 행 수 (레거시 공식)
@@ -214,6 +216,10 @@ void GridView::relayout()
         }
     }
 
+    // ── F1: 재배치 시작 전 모든 아이템을 레이아웃에서 detach — 위젯은 보존, QLayoutItem만 삭제
+    // itemAtPosition 분기 없이 매번 깨끗이 재구성 → 스왑/삭제 후 기하 충돌 원천 차단
+    while (QLayoutItem* it = m_grid->takeAt(0)) { delete it; }
+
     // ── 셀 배치 — 위젯 파괴 절대 금지; 재배치 + 크기갱신만 ───────────────
     int placeholderUsed = 0;
 
@@ -230,11 +236,7 @@ void GridView::relayout()
         if (cfg != nullptr) {
             auto* tile = m_tiles.count(cfg->id) ? m_tiles[cfg->id] : nullptr;
             if (tile != nullptr) {
-                // 레거시 패턴: 이미 해당 위치에 있지 않으면 재배치
-                auto* existing = m_grid->itemAtPosition(r, c);
-                if (!existing || existing->widget() != tile) {
-                    m_grid->addWidget(tile, r, c);
-                }
+                m_grid->addWidget(tile, r, c);  // detach 후 무조건 1회 등록 — 이중등록 불가
                 if (tile->size() != cellSize) {
                     tile->setFixedSize(cellSize);
                 }
@@ -256,10 +258,7 @@ void GridView::relayout()
         }
         ++placeholderUsed;
 
-        auto* existing = m_grid->itemAtPosition(r, c);
-        if (!existing || existing->widget() != ph) {
-            m_grid->addWidget(ph, r, c);
-        }
+        m_grid->addWidget(ph, r, c);  // detach 후 무조건 1회 등록
         if (ph->size() != cellSize) {
             ph->setFixedSize(cellSize);
         }
@@ -361,12 +360,8 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
                 if (chosen == actEdit)        m_cb.editRequested(tile->channelId);
                 else if (chosen == actRetry)  m_cb.retryRequested(tile->channelId);
                 else if (chosen == actRemove) {
-                    // U1: 삭제 확인 다이얼로그
-                    const auto ans = QMessageBox::question(
-                        tile, QStringLiteral("채널 삭제"),
-                        QStringLiteral("'%1' 채널을 삭제하시겠습니까?").arg(tile->name),
-                        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-                    if (ans == QMessageBox::Yes) m_cb.removeRequested(tile->channelId);
+                    // U1: 삭제 확인 다이얼로그 (F5: confirmDelete 헬퍼)
+                    if (nv::ui::confirmDelete(tile, tile->name)) m_cb.removeRequested(tile->channelId);
                 }
                 else if (chosen != nullptr && !chosen->data().isNull())
                     m_cb.swapRequested(tile->channelId,

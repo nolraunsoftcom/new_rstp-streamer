@@ -31,3 +31,5 @@
 | 15 | HW 디코드 GPU→CPU 왕복 | VideoToolbox 디코드 후 av_hwframe_transfer_data로 CPU 복사 + sws RGBA + 텍스처 재업로드(동반-rgba). 진짜 zero-copy(CVPixelBuffer→CVMetalTextureCache) 미적용 — 20ch CPU의 주 오버헤드 | M2b 후속 성능 작업 (가장 큰 CPU 레버) |
 | 16 | 32ch 성능 미측정 | 시뮬 32 퍼블리셔가 측정 머신 포화 — 별도 부하 발생원/세션 필요 | 후속 (분리 측정) |
 | 17 | GPU framePainted 가시성 의존 | RhiVideoRenderer.render()가 compositing 시에만 호출 → 오프스크린/최소화 창은 표시단계 미확정(구 SW paintEvent도 동일 특성, 회귀 아님) | M3 (필요 시 보정) |
+| 18 | 저장 실패 UI 미표시 | save 실패가 로그 한 줄뿐 — 상태바/다이얼로그 미반영 | M3 (UI 알림) |
+| 19 | placeholder 풀 미축소 | hide만, 최대 셀 수로 유한 | 경미, 보류 |

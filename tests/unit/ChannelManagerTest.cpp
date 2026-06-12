@@ -216,3 +216,34 @@ TEST_CASE("addChannel: rtsp 아닌 스킴(file://, http://)은 거부") {
     CHECK_FALSE(f.mgr.addChannel("c", "rtsp://cam1").empty());
     CHECK(f.mgr.channelCount() == 1);
 }
+
+// ── F4: restore 경로 URL 검증 ─────────────────────────────────────────────
+
+TEST_CASE("restore: 부적합 URL(http://) 항목은 스킵, 유효 항목만 복원") {
+    FakeChannelRepository repo;
+    repo.stored = {
+        {"ch1", "valid",   "rtsp://cam1",            0},
+        {"ch2", "invalid", "http://example.com/bad", 1},
+        {"ch3", "valid2",  "rtsp://cam2",            2},
+    };
+    FakeRuntimeFactory factory;
+    FakeClock clock;
+    FakeLogger logger;
+    ChannelManager mgr{repo, factory, clock, logger, ReconnectPolicy{}, StallPolicy{}};
+
+    mgr.restore(false);
+    CHECK(mgr.channelCount() == 2);
+    CHECK(factory.registry.count("ch1") == 1);
+    CHECK(factory.registry.count("ch2") == 0);  // http:// 스킵됨
+    CHECK(factory.registry.count("ch3") == 1);
+}
+
+// ── F6: isValidRtspUrl 대소문자 무시 ─────────────────────────────────────
+
+TEST_CASE("addChannel: 대문자 스킴 RTSP://, RTSPS://도 허용") {
+    Fixture f;
+    CHECK_FALSE(f.mgr.addChannel("a", "RTSP://cam1").empty());
+    CHECK_FALSE(f.mgr.addChannel("b", "RTSPS://cam2").empty());
+    CHECK_FALSE(f.mgr.addChannel("c", "Rtsp://cam3").empty());
+    CHECK(f.mgr.channelCount() == 3);
+}
