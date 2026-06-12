@@ -17,6 +17,7 @@
 #include "src/infra/system/ControlExecutor.h"
 #include "src/infra/system/SoakLogger.h"
 #include "src/infra/system/SteadyClock.h"
+#include "src/infra/video/VtMetalBridge.h"  // M2c Task2 컴파일/링크 확인용(호출은 Task3). 헤더만 참조.
 #include "src/ui/channels/ChannelListPanel.h"
 #include "src/ui/grid/GridView.h"
 #include "src/ui/shell/ControlBridge.h"
