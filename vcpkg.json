@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "new-viewer",
+  "version": "0.1.0",
+  "description": "ZiiLab RTSP multi-channel viewer — FFmpeg dynamic, GPL-free",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "features": [
+        "avcodec",
+        "avformat",
+        "avutil",
+        "swscale"
+      ],
+      "default-features": false
+    }
+  ],
+  "builtin-baseline": "a34c873a9717a888f58dc05268dea15592c2f822"
+}

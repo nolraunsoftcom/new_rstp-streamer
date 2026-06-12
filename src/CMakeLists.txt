@@ -12,9 +12,20 @@ target_include_directories(nv_app PUBLIC ${CMAKE_SOURCE_DIR})
 target_link_libraries(nv_app PUBLIC nv_domain)
 target_compile_options(nv_app PRIVATE -Wall -Wextra -Wpedantic)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
-  libavformat libavcodec libavutil libswscale)
+# ── FFmpeg 탐색 ──────────────────────────────────────────────────────────────
+# Windows: vcpkg 툴체인이 find_package(FFMPEG) 경로를 주입한다.
+# macOS/Linux: pkg-config 경로.
+if(WIN32)
+  # vcpkg가 설치한 FFmpeg CMake 패키지 사용.
+  # vcpkg.json에서 avcodec/avformat/avutil/swscale 피처만 선언(GPL 피처 제외).
+  find_package(FFMPEG REQUIRED COMPONENTS avformat avcodec avutil swscale)
+  # vcpkg FFmpeg CMake 패키지는 FFMPEG_INCLUDE_DIRS / FFMPEG_LIBRARIES 변수를 노출한다.
+else()
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+    libavformat libavcodec libavutil libswscale)
+endif()
+
 find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets Core Gui GuiPrivate ShaderTools)
 
 add_library(nv_infra STATIC
@@ -27,8 +38,18 @@ add_library(nv_infra STATIC
   infra/system/ResourceMonitor.cpp
 )
 target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
-target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG Qt6::Core)
 target_compile_options(nv_infra PRIVATE -Wall -Wextra -Wpedantic)
+
+if(WIN32)
+  # Windows/vcpkg: FFMPEG_INCLUDE_DIRS + FFMPEG_LIBRARIES (FindFFMPEG.cmake 변수).
+  # D3D11VA HW 디코딩은 HwContext.cpp의 #ifdef _WIN32 분기에서 활성.
+  # d3d11 / dxgi는 FFmpeg avcodec이 내부적으로 요구; 명시 링크로 확실히 해결.
+  target_include_directories(nv_infra PUBLIC ${FFMPEG_INCLUDE_DIRS})
+  target_link_libraries(nv_infra PUBLIC nv_app Qt6::Core ${FFMPEG_LIBRARIES} d3d11 dxgi)
+else()
+  # macOS/Linux: pkg-config IMPORTED_TARGET 사용.
+  target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG Qt6::Core)
+endif()
 
 # macOS: VideoToolbox HW 디코딩 — CVPixelBuffer 수명 관리에 CoreVideo 필요.
 if(APPLE)
@@ -85,3 +106,19 @@ else()
 endif()
 
 target_link_libraries(new_viewer PRIVATE nv_ui)
+
+# Windows: windeployqt — Qt DLL을 실행 파일 옆에 복사.
+# vcpkg FFmpeg DLL은 vcpkg 툴체인이 자동으로 output 디렉토리로 복사한다.
+# 수동 배포 시: windeployqt --release new_viewer.exe
+if(WIN32)
+  find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS "${Qt6_DIR}/../../../bin")
+  if(WINDEPLOYQT_EXECUTABLE)
+    add_custom_command(TARGET new_viewer POST_BUILD
+      COMMAND "${WINDEPLOYQT_EXECUTABLE}"
+              --no-translations
+              --no-system-d3d-compiler
+              "$<TARGET_FILE:new_viewer>"
+      COMMENT "windeployqt: Qt DLL 배포"
+    )
+  endif()
+endif()
