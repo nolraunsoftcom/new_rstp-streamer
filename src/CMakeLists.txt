@@ -15,14 +15,15 @@ target_compile_options(nv_app PRIVATE -Wall -Wextra -Wpedantic)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
   libavformat libavcodec libavutil libswscale)
-find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets Core)
 
 add_library(nv_infra STATIC
   infra/system/ControlExecutor.cpp
   infra/ffmpeg/FfmpegStreamSource.cpp
+  infra/persist/JsonChannelRepository.cpp
 )
 target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
-target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG)
+target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG Qt6::Core)
 target_compile_options(nv_infra PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(nv_ui STATIC
