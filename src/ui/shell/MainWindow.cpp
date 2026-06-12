@@ -5,7 +5,6 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QStatusBar>
 #include <QTabBar>
 #include <QTabWidget>
@@ -112,21 +111,14 @@ MainWindow::MainWindow(GridView* grid, ChannelListPanel* channelPanel, LogPanel*
     videoTabs->tabBar()->setFixedHeight(kHeaderHeight);
     videoTabs->setStyleSheet(kVideoTabStyle);
 
-    // "전체" 탭 — 스크롤 가능 그리드
+    // "전체" 탭 — GridView가 자체 QScrollArea를 포함 (레거시 구조)
     auto* gridPage = new QWidget();
     auto* gridPageLayout = new QVBoxLayout(gridPage);
     gridPageLayout->setContentsMargins(0, 0, 0, 0);
     gridPageLayout->setSpacing(0);
 
-    auto* gridScrollArea = new QScrollArea(gridPage);
-    gridScrollArea->setWidgetResizable(true);
-    gridScrollArea->setFrameShape(QFrame::NoFrame);
-    gridScrollArea->setStyleSheet(QStringLiteral(
-        "QScrollArea { background-color: black; border: none; }"));
-
-    grid->setParent(nullptr);
-    gridScrollArea->setWidget(grid);
-    gridPageLayout->addWidget(gridScrollArea, 1);
+    grid->setParent(gridPage);
+    gridPageLayout->addWidget(grid, 1);
 
     videoTabs->addTab(gridPage, QStringLiteral("전체"));
     videoTabs->tabBar()->setTabButton(0, QTabBar::RightSide, nullptr);

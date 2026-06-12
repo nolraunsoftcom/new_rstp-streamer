@@ -1,10 +1,12 @@
 #include "GridView.h"
+#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QScrollBar>
 #include <QVBoxLayout>
 #include "src/domain/layout/GridRules.h"
 #include "src/infra/ffmpeg/ChannelSourceFactory.h"
@@ -110,16 +112,27 @@ struct GridView::Tile : public QWidget {
 // ─────────────────────────────────────────────────────────────────────────
 
 GridView::GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb, QWidget* parent)
-    : QWidget(parent), m_slots(slotRegistry), m_cb(std::move(cb))
+    : QScrollArea(parent), m_slots(slotRegistry), m_cb(std::move(cb))
 {
-    setStyleSheet(QStringLiteral("background-color: black;"));
-    m_grid = new QGridLayout(this);
+    // 레거시 스크롤 영역 설정: 수직 스크롤만, 수평 없음, 프레임 없음, 검정 배경
+    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setFrameShape(QFrame::NoFrame);
+    setStyleSheet(QStringLiteral("QScrollArea { background-color: black; border: none; }"));
+    setWidgetResizable(false);  // m_content 크기를 직접 제어 (레거시 setFixedHeight 방식)
+
+    // 콘텐츠 위젯 + 그리드 레이아웃
+    m_content = new QWidget();
+    m_content->setStyleSheet(QStringLiteral("background-color: black;"));
+    m_grid = new QGridLayout(m_content);
     m_grid->setSpacing(kGridSpacing);
     m_grid->setContentsMargins(0, 0, 0, 0);
     m_grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+
+    setWidget(m_content);
 }
 
-// ── 레거시 채움 알고리즘 (MainWindow.cpp 2333~2345 직접 이식) ─────────────
+// ── 레거시 채움 알고리즘 (MainWindow.cpp updateGridCellSizes 직접 이식) ──────
 // rebuild()와 resizeEvent() 양쪽에서 호출. 계산된 레이아웃이 직전과 동일하면 스킵.
 void GridView::relayout()
 {
@@ -137,14 +150,17 @@ void GridView::relayout()
         if (cfg.gridIndex > maxGridIndex) maxGridIndex = cfg.gridIndex;
     }
 
+    // 뷰포트 크기 — 레거시: m_gridScrollArea->viewport()->width()/height()
+    const int viewportWidth  = viewport()->width();
+    const int viewportHeight = viewport()->height();
+
     // 셀 크기
-    const int w       = width();
-    const int cellW   = qMax(1, (w - (cols - 1) * kGridSpacing) / cols);
-    const int cellH   = cellW * 3 / 4 + kInfoBarHeight;
+    const int cellW = qMax(1, (viewportWidth - (cols - 1) * kGridSpacing) / cols);
+    const int cellH = cellW * 3 / 4 + kInfoBarHeight;
 
     // 행 수 (레거시 공식)
     const int requiredRows    = qMax(1, (maxGridIndex + cols) / cols);
-    const int rowsForViewport = qMax(1, (height() + kGridSpacing + cellH) / (cellH + kGridSpacing));
+    const int rowsForViewport = qMax(1, (viewportHeight + kGridSpacing + cellH) / (cellH + kGridSpacing));
     const int rows            = qMax(requiredRows, rowsForViewport);
     const int totalCells      = rows * cols;
 
@@ -207,7 +223,7 @@ void GridView::relayout()
             auto* slot = m_slots ? m_slots->slot(cfg->id) : nullptr;
             if (slot != nullptr) {
                 auto* tile = new Tile(*slot, cfg->id,
-                                      QString::fromStdString(cfg->name), this);
+                                      QString::fromStdString(cfg->name), m_content);
                 tile->setFixedSize(cellSize);
                 m_grid->addWidget(tile, r, c);
                 m_tiles[QString::fromStdString(cfg->id)] = tile;
@@ -245,13 +261,18 @@ void GridView::relayout()
         }
 
         // 빈 셀 — 회색 "No Stream" 플레이스홀더 (#ededed, #777 14px)
-        auto* empty = new QLabel(QStringLiteral("No Stream"), this);
+        auto* empty = new QLabel(QStringLiteral("No Stream"), m_content);
         empty->setAlignment(Qt::AlignCenter);
         empty->setStyleSheet(
             QStringLiteral("color:#777; font-size:14px; background:#ededed;"));
         empty->setFixedSize(cellSize);
         m_grid->addWidget(empty, r, c);
     }
+
+    // ── 레거시 gridHeight 방식: m_content 높이를 고정 (뷰포트 채움) ──────
+    const int gridHeight = rows * cellH + (rows - 1) * kGridSpacing;
+    m_content->setFixedHeight(gridHeight);
+    m_content->setFixedWidth(viewportWidth);
 
     // ── 캐시 갱신 ────────────────────────────────────────────────────────
     m_cachedCols  = cols;
@@ -262,7 +283,7 @@ void GridView::relayout()
 
 void GridView::resizeEvent(QResizeEvent* ev)
 {
-    QWidget::resizeEvent(ev);
+    QScrollArea::resizeEvent(ev);
     relayout();
 }
 

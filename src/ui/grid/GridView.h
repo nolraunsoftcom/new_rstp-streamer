@@ -1,10 +1,11 @@
 #pragma once
-#include <QWidget>
+#include <QScrollArea>
 #include <functional>
 #include <map>
 #include "src/domain/channel/ChannelConfig.h"
 
 class QGridLayout;
+class QWidget;
 
 namespace nv::infra { class ChannelSourceFactory; }
 
@@ -12,8 +13,8 @@ namespace nv::ui {
 class VideoTileWidget;
 
 // 채널 타일 그리드. rebuild()로 전체 재구성 (M2a 단순화 — 드래그 스왑은 우클릭 메뉴로 대체).
-// 컬럼 0 = Auto.
-class GridView : public QWidget {
+// 컬럼 0 = Auto. 레거시 구조: QScrollArea(수직 스크롤) + m_content(QGridLayout).
+class GridView : public QScrollArea {
     Q_OBJECT
 public:
     struct Callbacks {
@@ -39,7 +40,8 @@ private:
 
     nv::infra::ChannelSourceFactory* m_slots = nullptr;
     Callbacks m_cb;
-    QGridLayout* m_grid = nullptr;
+    QWidget*     m_content = nullptr;   // scroll content widget
+    QGridLayout* m_grid    = nullptr;
     struct Tile;
     std::map<QString, Tile*> m_tiles;             // channelId → tile
     std::vector<nv::domain::ChannelConfig> m_lastConfigs;
