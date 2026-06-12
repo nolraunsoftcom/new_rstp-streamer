@@ -57,6 +57,12 @@ public:
     // 진짜 시작 실패 시 serviceRecording이 m_recordRequested를 내리므로 reconcile은 그대로 동작.
     bool isRecording() const { return m_recording.load() || m_recordRequested.load(); }
 
+    // D10: 활성 레코더가 쓰기 오류(디스크 풀/쓰기 실패)를 만났는지 반환한다.
+    // 디코드 스레드가 writePacket 후 레코더의 hadError를 이 atomic에 미러링한다 →
+    // control 스레드(reconcile)가 락 없이 안전하게 읽는다. 레코더가 없으면 false.
+    // (isRecording은 m_open 유지로 true일 수 있어 별도 신호가 필요 — 무음 데이터손실 가시화.)
+    bool hadRecordingError() const { return m_recordError.load(); }
+
 private:
     void run(std::string url, nv::app::StreamSourceListener* listener);
     static int interruptCb(void* opaque);
@@ -77,6 +83,7 @@ private:
     std::string m_pendingPath;                  // startRecording이 채움(빈 문자열=요청 없음)
     std::atomic<bool> m_recordRequested{false}; // 시작 요청 래치
     std::atomic<bool> m_recording{false};       // 디코드 스레드가 레코더를 연 상태
+    std::atomic<bool> m_recordError{false};     // D10: 활성 레코더 쓰기 오류 미러(디코드 set, control read)
     std::unique_ptr<FfmpegRecorder> m_recorder; // 디코드 스레드 전용 소유(락 불필요)
     std::string m_currentPath;                  // 디코드 스레드 전용: 현재 레코더가 쓰는 경로
                                                 // (m_pendingPath와 다르면 세그먼트 전환, D1)

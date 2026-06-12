@@ -155,6 +155,21 @@ TEST_CASE("FfmpegRecorder: stop 후 재start 가능(롤오버 구조 보장)") {
     avformat_close_input(&in);
 }
 
+// ── D8 비동기 쓰기 큐: 단조 스트림을 빠르게 밀어넣어도 stop flush가 유효 출력 생성 ──
+// 실제 캡처처럼 단조 증가 타임스탬프의 fixture 패킷을 한 번에 빠르게 큐에 넣는다(인라인
+// write가 없으므로 디코드측은 즉시 반환). 검증: 비동기 큐·writer 스레드·stop flush 경로가
+// 크래시·누수·쓰기오류 없이 동작하고 비어있지 않은 MKV를 만든다.
+// (큐 상한을 넘으면 가장 오래된 비키프레임을 드랍하지만, 남은 패킷의 DTS는 여전히 단조라
+//  muxer가 거부하지 않는다 — 드랍은 쓰기 오류가 아니므로 hadError는 false.)
+TEST_CASE("FfmpegRecorder(D8): 비동기 큐 단일 패스 → stop flush 후 유효 출력") {
+    int packets = 0;
+    const std::string out = remuxFixture(packets);   // remuxFixture가 비동기 경로를 그대로 탄다
+    REQUIRE_FALSE(out.empty());
+    CHECK(packets > 0);
+    CHECK(fileSize(out) > 0);
+    ::remove(out.c_str());
+}
+
 // ── ffprobe 재생가능 검증 (통합 성격 — NV_RECORD_TEST 가드) ───────────────────
 // ctest의 skip 종료코드 처리를 피하기 위해 SKIP() 대신 early-return으로 통과시킨다
 // (미설정 시 trivially pass). 외부 ffprobe 의존이라 기본 CI에서는 비활성.

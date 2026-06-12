@@ -73,14 +73,22 @@ bool FfmpegRecorder::start(const std::string& path, const AVStream* inputVideoSt
     m_outStreamIndex = out->index;
     m_inTimeBase = inputVideoStream->time_base;
     m_open = true;
+
+    // D8: 전용 쓰기 스레드 기동. 디코드 스레드는 큐에 넣기만 하고, 이 스레드가 mux한다.
+    {
+        std::lock_guard lk(m_qMu);
+        m_writerStop = false;
+        m_droppedPackets = 0;
+    }
+    m_writer = std::thread(&FfmpegRecorder::writerLoop, this);
     return true;
 }
 
 void FfmpegRecorder::writePacket(const AVPacket* pkt) {
     if (!m_open || m_fmt == nullptr || pkt == nullptr) return;
-    // 부채 해소: 한 번 쓰기 오류가 나면 이후 패킷도 거의 확실히 실패한다 — 매 패킷 재시도하면
-    // av_interleaved_write_frame 실패 + stderr 로그가 폭주한다(로그 스팸). 오류 상태면 조기 반환.
-    if (m_errored) return;
+    // 부채 해소: 한 번 쓰기 오류가 나면 이후 패킷도 거의 확실히 실패한다 — 매 패킷 큐잉하면
+    // 의미 없이 메모리만 쓴다. 오류 상태면 조기 반환(로그 스팸도 방지).
+    if (m_errored.load()) return;
 
     // 첫 패킷은 키프레임이어야 한다 — 키프레임 전 패킷은 드랍(remux 디코드 불가 방지).
     if (!m_gotKeyframe) {
@@ -91,10 +99,10 @@ void FfmpegRecorder::writePacket(const AVPacket* pkt) {
 
     // 원본 pkt를 변경하지 않도록 복사본에 작업한다(다른 소비자=디코더와 공유될 수 있음).
     AVPacket* copy = av_packet_alloc();
-    if (copy == nullptr) { m_errored = true; return; }
+    if (copy == nullptr) { m_errored.store(true); return; }
     if (av_packet_ref(copy, pkt) < 0) {
         av_packet_free(&copy);
-        m_errored = true;
+        m_errored.store(true);
         return;
     }
 
@@ -105,24 +113,98 @@ void FfmpegRecorder::writePacket(const AVPacket* pkt) {
     }
 
     // 입력 timebase → 출력 stream timebase로 pts/dts/duration rescale.
+    // (rescale/오프셋은 디코드 스레드에서 수행 — 가볍다. 블로킹 mux만 쓰기 스레드로 격리.)
     const AVStream* out = m_fmt->streams[m_outStreamIndex];
     av_packet_rescale_ts(copy, m_inTimeBase, out->time_base);
     copy->stream_index = m_outStreamIndex;
     copy->pos = -1;                      // muxer가 위치를 다시 계산
 
-    const int rc = av_interleaved_write_frame(m_fmt, copy);
-    if (rc < 0) {
-        // 격리: 쓰기 실패는 이 레코더만 오류 상태로 — 예외 던지지 않음, 호출측(디코드 스레드)
-        // 으로 전파하지 않는다. 이후 패킷은 계속 시도하되 hadError()로 진단 가능.
-        std::fprintf(stderr, "[FfmpegRecorder] write_frame 실패 (%d)\n", rc);
-        m_errored = true;
+    // D8: 인라인 write 대신 큐에 넣고 즉시 반환(디코드 핫루프 비블로킹).
+    // 큐가 가득이면 가장 오래된 비키프레임을 드랍(GOP 단위, 단기 녹화라 수용).
+    {
+        std::lock_guard lk(m_qMu);
+        if (m_queue.size() >= kMaxQueue) {
+            dropOldestNonKeyLocked();
+        }
+        m_queue.push_back(copy);   // 소유 이전 — 쓰기 스레드가 free
     }
-    // av_interleaved_write_frame은 성공 시 packet 소유권을 가져가 내부에서 ref를 비운다.
-    // 실패 시에도 unref하므로 여기서는 free만 하면 된다.
-    av_packet_free(&copy);
+    m_qCv.notify_one();
+}
+
+// 쓰기 스레드: 큐에서 패킷을 꺼내 mux. 블로킹 디스크 I/O를 디코드 스레드에서 격리한다.
+void FfmpegRecorder::writerLoop() {
+    for (;;) {
+        AVPacket* pkt = nullptr;
+        {
+            std::unique_lock lk(m_qMu);
+            m_qCv.wait(lk, [this] { return !m_queue.empty() || m_writerStop; });
+            if (m_queue.empty()) {
+                // 큐가 비었고 종료 신호 — flush 완료, 스레드 종료.
+                if (m_writerStop) return;
+                continue;
+            }
+            pkt = m_queue.front();
+            m_queue.pop_front();
+        }
+        // mux는 락 밖에서(블로킹 I/O 동안 디코드 스레드의 enqueue를 막지 않음).
+        if (!m_errored.load()) {
+            const int rc = av_interleaved_write_frame(m_fmt, pkt);
+            if (rc < 0) {
+                // 격리: 쓰기 실패는 이 레코더만 오류 상태로. 디코드 스레드로 전파하지 않는다.
+                std::fprintf(stderr, "[FfmpegRecorder] write_frame 실패 (%d)\n", rc);
+                m_errored.store(true);
+            }
+        }
+        // 성공 시 av_interleaved_write_frame이 ref를 비우고, 실패/오류스킵 시에도 free로 정리.
+        av_packet_free(&pkt);
+    }
+}
+
+void FfmpegRecorder::stopWriter() {
+    if (!m_writer.joinable()) return;
+    {
+        std::lock_guard lk(m_qMu);
+        m_writerStop = true;   // 큐를 다 비운 뒤 종료(flush 보장)
+    }
+    m_qCv.notify_one();
+    m_writer.join();
+}
+
+void FfmpegRecorder::dropOldestNonKeyLocked() {
+    // 가장 오래된 비키프레임을 찾아 드랍(GOP 보존 노력). 모두 키프레임이면 맨 앞을 드랍.
+    for (auto it = m_queue.begin(); it != m_queue.end(); ++it) {
+        if (((*it)->flags & AV_PKT_FLAG_KEY) == 0) {
+            av_packet_free(&*it);
+            m_queue.erase(it);
+            ++m_droppedPackets;
+            return;
+        }
+    }
+    AVPacket* oldest = m_queue.front();
+    m_queue.pop_front();
+    av_packet_free(&oldest);
+    ++m_droppedPackets;
 }
 
 void FfmpegRecorder::stop() {
+    // D8: 먼저 쓰기 스레드를 멈추고 join한다 — 큐의 잔여 패킷이 모두 mux된 뒤 트레일러를 쓴다.
+    // (writerLoop은 m_writerStop이어도 큐를 다 비우고 종료하므로 flush가 보장된다.)
+    stopWriter();
+
+    // 큐 드랍 통계 1회 로그(있을 때만). m_writer join 후라 락 없이 안전하지만 일관성 위해 잠근다.
+    uint64_t dropped = 0;
+    {
+        std::lock_guard lk(m_qMu);
+        dropped = m_droppedPackets;
+        // 혹시 남은 패킷(오류 경로 등) 정리 — 누수 방지.
+        for (AVPacket* p : m_queue) av_packet_free(&p);
+        m_queue.clear();
+    }
+    if (dropped > 0) {
+        std::fprintf(stderr, "[FfmpegRecorder] 큐 가득으로 %llu 패킷 드랍(느린 저장소)\n",
+                     static_cast<unsigned long long>(dropped));
+    }
+
     if (m_fmt == nullptr) {              // 미시작/이미 정리됨 — 멱등
         m_open = false;
         return;
@@ -133,7 +215,7 @@ void FfmpegRecorder::stop() {
         const int rc = av_write_trailer(m_fmt);
         if (rc < 0) {
             std::fprintf(stderr, "[FfmpegRecorder] write_trailer 실패 (%d)\n", rc);
-            m_errored = true;
+            m_errored.store(true);
         }
     }
     cleanup();

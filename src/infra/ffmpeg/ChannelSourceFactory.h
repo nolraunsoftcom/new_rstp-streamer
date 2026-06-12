@@ -47,6 +47,7 @@ public:
                         const std::string& outputPath) override;
     void stopRecording(const std::string& channelId) override;
     bool isRecording(const std::string& channelId) const override;
+    bool hasRecordingError(const std::string& channelId) const override;
 
     // ISnapshotSink — 채널 슬롯의 최신 RGBA를 outputPath에 PNG로 저장.
     bool snapshot(const std::string& channelId, const std::string& outputPath) override;
@@ -94,6 +95,12 @@ private:
     std::map<std::string, std::unique_ptr<LatestSurfaceSlot>> m_slots;
     // 살아있는 채널 소스(녹화 위임용). createSource에서 등록, destroySource에서 제거.
     // 소유는 호출자(ChannelController)가 unique_ptr로 보유하므로 여기는 비소유 포인터.
+    //
+    // 스레드 계약(D3): IRecordingSink/ISnapshotSink 메서드(startRecording/stopRecording/
+    // isRecording/hasRecordingError/snapshot)는 control 스레드에서만 호출된다는 불변량에
+    // 의존한다. 이 메서드들은 m_mu 하에서 Bundle*를 읽고 락을 푼 뒤 b->ffmpeg()를 호출하는데,
+    // Bundle 소멸(destroySource→호출자 unique_ptr 파괴)도 같은 control 스레드라 호출 도중
+    // Bundle이 파괴될 수 없다 → 뮤텍스 밖 역참조가 안전하다(부채 D3 근거).
     std::map<std::string, Bundle*> m_bundles;
 
     // H3: 스냅샷 워커 풀 — 최대 2스레드로 제한(연타 시 스레드·버퍼 누적 방지).

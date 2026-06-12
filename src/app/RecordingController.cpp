@@ -93,6 +93,15 @@ void RecordingController::doStart(const std::string& channelId, const std::strin
         auto& ch = m_channels[channelId];
         ch.state = nv::domain::RecordingState::Idle;
         ch.channelName = channelName;
+
+        // D2 백오프: 연속 실패를 누적한다. 임계치 도달 시 armed를 내려 무한 재시도·로그
+        // 스팸을 막고 1회 명확한 경고를 남긴다(사용자 재시도 필요). tick/onStreaming의
+        // 재시도 경로(D1)가 이 카운터를 공유하므로 영구 실패가 폭주하지 않는다.
+        if (++ch.startFailures >= kMaxStartFailures && ch.armed) {
+            ch.armed = false;
+            m_logger.log(LogLevel::Warn, channelId, "RecordingController",
+                         "녹화 시작 반복 실패 — 중단, 사용자 재시도 필요");
+        }
         notify(channelId, nv::domain::RecordingState::Idle);
         return;
     }
@@ -100,6 +109,8 @@ void RecordingController::doStart(const std::string& channelId, const std::strin
     ch.state        = nv::domain::RecordingState::Recording;
     ch.channelName  = channelName;
     ch.segmentStart = m_clock.now();
+    ch.startFailures = 0;   // D2: 성공 시 백오프 카운터 리셋
+    ch.retryStart = false;  // D1: 정상 녹화 중 — 재시도 게이트 해제
     notify(channelId, nv::domain::RecordingState::Recording);
 }
 
@@ -107,6 +118,7 @@ void RecordingController::doStop(const std::string& channelId) {
     m_sink.stopRecording(channelId);
     auto& ch  = m_channels[channelId];
     ch.state  = nv::domain::RecordingState::Idle;
+    ch.retryStart = false;   // D1: 명시적 stop(토글/드롭) — tick 재시도 게이트 해제
     notify(channelId, nv::domain::RecordingState::Idle);
 }
 
@@ -168,6 +180,17 @@ void RecordingController::onStreaming(const std::string& channelId,
 void RecordingController::tick() {
     const auto now = m_clock.now();
     for (auto& [id, ch] : m_channels) {
+        // ── D1 롤오버 재시도: armed인데 Idle로 떨어진 채널을 복구 ──────────────────
+        // 롤오버 doStart 실패(디스크 일시 풀)나 디스크오류 수렴으로 armed && Idle이 되면,
+        // onStreaming 신호가 없어도(이미 Streaming 상태라 전이 엣지가 안 옴) 영원히
+        // 녹화가 멈춘다. retryStart 게이트가 선 채널만 tick에서 doStart를 재시도해 디스크가
+        // 비워지면 자동 복구한다. onReconnect 드롭 엣지(소스 재연결 대기)는 retryStart=false라
+        // 죽은 소스에 재시도하지 않는다. D2 백오프(doStart 내부)가 영구 실패 폭주를 막는다.
+        if (ch.armed && ch.state == nv::domain::RecordingState::Idle && ch.retryStart) {
+            doStart(id, ch.channelName);
+            continue;
+        }
+
         if (ch.state != nv::domain::RecordingState::Recording) continue;
 
         const auto elapsed =
@@ -190,17 +213,34 @@ void RecordingController::tick() {
             // m_recordRequested 래치를 확실히 내린다. wedge-detach 등 예외 경로에서
             // 좀비 녹화(레코더는 닫혔으나 래치가 살아있는 상태)를 차단한다.
             // armed는 유지 — H1 적용 후 여기 도달은 진짜 시작 실패이므로
-            // 다음 onStreaming 시 재시도가 맞다(로그로 가시화됨).
+            // 다음 tick(D1)/onStreaming 시 재시도가 맞다(로그로 가시화됨, D2 백오프로 제한).
             m_sink.stopRecording(id);
             ch.state = nv::domain::RecordingState::Idle;
             notify(id, nv::domain::RecordingState::Idle);
             continue;
         }
 
+        // D10 디스크/쓰기 오류 가시화: sink는 여전히 isRecording==true(m_open 유지)지만
+        // 레코더가 쓰기 오류(디스크 풀 등)를 만나면 데이터가 무음으로 손실된다. UI는 REC를
+        // 표시하나 실제 저장은 멈춘 상태 — 최대 세그먼트 길이(10분)까지 지속될 수 있다.
+        // hasRecordingError로 이를 3초 내 즉시 가시화한다: 녹화를 멈추고 Idle로 수렴 + 경고
+        // 로그 + 옵저버 통지(UI REC 해제). armed는 유지 → D1 재시도가 디스크 복구 시 자동 재개.
+        if (m_sink.hasRecordingError(id)) {
+            m_logger.log(LogLevel::Warn, id, "RecordingController",
+                         "디스크/쓰기 오류로 녹화 중단 — Idle로 수렴(REC 해제)");
+            m_sink.stopRecording(id);
+            ch.state = nv::domain::RecordingState::Idle;
+            ch.retryStart = true;   // D1: 디스크 복구 시 tick이 새 세그먼트로 자동 재개
+            notify(id, nv::domain::RecordingState::Idle);
+            continue;
+        }
+
         if (elapsed >= m_policy.maxDuration) {
-            // 롤오버: stop + 새 경로로 start
+            // 롤오버: stop + 새 경로로 start. doStart 실패 시 armed && Idle로 떨어지지만
+            // retryStart를 세워 다음 tick의 D1 재시도가 복구한다(이전엔 영구 정지였음).
             m_sink.stopRecording(id);
             ch.state = nv::domain::RecordingState::Idle;  // 임시 — doStart가 Recording으로 전환
+            ch.retryStart = true;
             doStart(id, ch.channelName);
         }
     }

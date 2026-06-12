@@ -31,6 +31,7 @@ public:
         auto it = m_recording.find(channelId);
         return it != m_recording.end() && it->second;
     }
+    bool hasRecordingError(const std::string& /*channelId*/) const override { return false; }
 
     bool failNext  = false;
     int  startCount = 0;
@@ -351,6 +352,7 @@ public:
         auto it = m_recording.find(channelId);
         return it != m_recording.end() && it->second;
     }
+    bool hasRecordingError(const std::string& /*channelId*/) const override { return false; }
     struct StartCall { std::string channelId; std::string outputPath; };
     bool forceNotRecording = false;   // true면 start 후에도 isRecording==false
     std::vector<StartCall> startCalls;
@@ -455,4 +457,164 @@ TEST_CASE("옵저버: toggle 시 상태 변화를 통지한다") {
     CHECK(events[0].second == RecordingState::Recording);
     CHECK(events[1].first  == "ch1");
     CHECK(events[1].second == RecordingState::Idle);
+}
+
+// ── D10: 디스크/쓰기 오류 가시화 ─────────────────────────────────────────────
+
+TEST_CASE("D10: sink.hasRecordingError=true면 tick이 Idle로 수렴(REC 해제) + 경고") {
+    FakeClock clock;
+    FakeRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{600}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    std::vector<std::pair<std::string, RecordingState>> events;
+    ctrl.setObserver([&](const std::string& id, RecordingState s) {
+        events.push_back({id, s});
+    });
+
+    ctrl.toggle("ch1", "Cam1");   // 정상 시작 — isRecording==true
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    // 디스크 풀 모사: sink는 isRecording==true(m_open 유지)지만 쓰기 오류 발생.
+    sink.setRecordingError("ch1", true);
+
+    // 유예(3초)를 넘겨 reconcile/error 검사가 동작하게 한다.
+    clock.advance(std::chrono::seconds{4});
+    ctrl.tick();
+
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Idle);   // 무음 손실 가시화 → REC 해제
+
+    const bool idleNotified = std::any_of(events.begin(), events.end(),
+        [](const auto& e){ return e.second == RecordingState::Idle; });
+    CHECK(idleNotified);
+
+    const bool hasWarn = std::any_of(logger.entries.begin(), logger.entries.end(),
+        [](const auto& e){ return e.level == nv::app::LogLevel::Warn; });
+    CHECK(hasWarn);
+}
+
+TEST_CASE("D10: 오류 없으면 정상 녹화는 수렴하지 않는다") {
+    FakeClock clock;
+    FakeRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{600}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    ctrl.toggle("ch1", "Cam1");
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    clock.advance(std::chrono::seconds{10});
+    ctrl.tick();
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Recording);   // 오류 없음 — 유지
+}
+
+// ── D1/D2: 롤오버 재시도 + 백오프 ────────────────────────────────────────────
+
+namespace {
+// N회 연속 start를 실패시키고 그 후 성공하는 페이크(롤오버 실패→복구 모사).
+class CountedFailRecordingSink final : public nv::app::IRecordingSink {
+public:
+    bool startRecording(const std::string& channelId,
+                        const std::string& /*outputPath*/) override {
+        ++startAttempts;
+        if (failuresRemaining > 0) { --failuresRemaining; return false; }
+        m_recording[channelId] = true;
+        ++startCount;
+        return true;
+    }
+    void stopRecording(const std::string& channelId) override {
+        m_recording[channelId] = false;
+        ++stopCount;
+    }
+    bool isRecording(const std::string& channelId) const override {
+        auto it = m_recording.find(channelId);
+        return it != m_recording.end() && it->second;
+    }
+    bool hasRecordingError(const std::string& /*channelId*/) const override { return false; }
+
+    int failuresRemaining = 0;   // 이 횟수만큼 startRecording이 false
+    int startAttempts = 0;       // 시도 총횟수(성공+실패)
+    int startCount = 0;          // 성공 횟수
+    int stopCount  = 0;
+private:
+    std::unordered_map<std::string, bool> m_recording;
+};
+} // namespace
+
+TEST_CASE("D1: 롤오버 doStart 실패 후 다음 tick에서 재시도해 복구한다") {
+    FakeClock clock;
+    CountedFailRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{60}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    ctrl.toggle("ch1", "Cam1");   // start 1 성공
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+    REQUIRE(sink.startCount == 1);
+
+    // 롤오버 시점에 1회 실패하도록 설정.
+    sink.failuresRemaining = 1;
+    clock.advance(std::chrono::seconds{60});
+    ctrl.tick();   // 롤오버 → doStart 실패 → armed && Idle (retryStart=true)
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Idle);
+
+    // 다음 tick: D1 재시도가 성공해 다시 Recording.
+    ctrl.tick();
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Recording);
+    CHECK(sink.startCount == 2);   // 최초 + 재시도 성공
+}
+
+TEST_CASE("D2: doStart 연속 실패가 임계치에 도달하면 armed 해제 + 재시도 중단") {
+    FakeClock clock;
+    CountedFailRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{60}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    ctrl.toggle("ch1", "Cam1");   // start 1 성공 (startFailures 리셋)
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    // 롤오버 후 영구 실패(충분히 큰 실패 수).
+    sink.failuresRemaining = 100;
+    clock.advance(std::chrono::seconds{60});
+    ctrl.tick();   // 롤오버 실패 #1 (retryStart=true)
+
+    // 임계치(5)까지 추가 tick — 각 tick이 D1 재시도(실패)로 카운터 누적.
+    for (int i = 0; i < 10; ++i) ctrl.tick();
+
+    // armed가 해제되면 더 이상 재시도하지 않는다 — 시도 횟수가 폭주하지 않음.
+    const int attemptsAfterDisarm = sink.startAttempts;
+    for (int i = 0; i < 10; ++i) ctrl.tick();
+    CHECK(sink.startAttempts == attemptsAfterDisarm);   // 추가 시도 없음(중단됨)
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Idle);
+
+    // "반복 실패 — 중단" 경고가 남아야 한다.
+    const bool hasStopWarn = std::any_of(logger.entries.begin(), logger.entries.end(),
+        [](const auto& e){ return e.level == nv::app::LogLevel::Warn &&
+                                   e.message.find("반복 실패") != std::string::npos; });
+    CHECK(hasStopWarn);
+}
+
+TEST_CASE("D1: onReconnect 드롭 엣지는 tick 재시도를 유발하지 않는다(죽은 소스 보호)") {
+    FakeClock clock;
+    CountedFailRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{600}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    ctrl.toggle("ch1", "Cam1");
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    ctrl.onReconnect("ch1", "Cam1");   // 드롭 — armed && Idle, retryStart=false
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Idle);
+
+    const int attemptsBefore = sink.startAttempts;
+    for (int i = 0; i < 5; ++i) ctrl.tick();   // tick은 재시도하지 않아야 함
+    CHECK(sink.startAttempts == attemptsBefore);   // 재연결 대기 중 — 시도 없음
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Idle);
+
+    // 복구(onStreaming)에서만 재개
+    ctrl.onStreaming("ch1", "Cam1");
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Recording);
 }

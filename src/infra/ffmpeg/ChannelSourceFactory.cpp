@@ -91,6 +91,17 @@ bool ChannelSourceFactory::isRecording(const std::string& channelId) const {
     return b != nullptr && b->ffmpeg().isRecording();
 }
 
+bool ChannelSourceFactory::hasRecordingError(const std::string& channelId) const {
+    // D10: 활성 레코더 쓰기 오류(디스크 풀 등)를 위임. 소스 없으면 false.
+    Bundle* b = nullptr;
+    {
+        std::lock_guard lk(m_mu);
+        auto it = m_bundles.find(channelId);
+        if (it != m_bundles.end()) b = it->second;
+    }
+    return b != nullptr && b->ffmpeg().hadRecordingError();
+}
+
 bool ChannelSourceFactory::snapshot(const std::string& channelId,
                                     const std::string& outputPath) {
     LatestSurfaceSlot* s = nullptr;

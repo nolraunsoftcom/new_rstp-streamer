@@ -55,7 +55,17 @@ private:
         bool armed{false};                                  // 사용자 녹화 의도(끊김에도 유지)
         std::string channelName;                            // 롤오버 시 재사용
         std::chrono::steady_clock::time_point segmentStart; // 현재 세그먼트 시작 시각
+        // D2 백오프: doStart 연속 실패 횟수. kMaxStartFailures 도달 시 armed를 내려
+        // 무한 재시도·로그 스팸을 막는다. doStart 성공 시 0으로 리셋.
+        unsigned startFailures{0};
+        // D1 재시도 의도: 롤오버/디스크오류로 armed && Idle이 됐을 때만 tick에서 doStart를
+        // 재시도하게 하는 게이트. onReconnect의 드롭 엣지(소스가 죽어가는 중, onStreaming
+        // 복구를 기다림)에서는 false라 tick이 죽은 소스에 재시도하지 않는다(백오프 오염 방지).
+        bool retryStart{false};
     };
+
+    // D2: doStart 연속 실패가 이 횟수에 도달하면 armed=false + 1회 경고(사용자 재시도 필요).
+    static constexpr unsigned kMaxStartFailures = 5;
 
     // outputPath 생성: <baseDir>/<channelName>_<yyyyMMdd_HHmmss>.mkv
     // baseDir은 환경변수 NV_RECORD_DIR or 현재 작업 디렉토리(테스트 친화적).

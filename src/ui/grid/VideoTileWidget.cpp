@@ -76,6 +76,17 @@ void VideoTileWidget::fallbackToSw() {
 
 void VideoTileWidget::pollFrame() {
     if (m_renderer == nullptr) return;
+
+    // D9 오프스크린 폴링 스킵: 화면에 보이지 않는 타일은 latestSurface 조회·RGBA 복사를
+    // 건너뛴다. latestSurface는 슬롯 RGBA(최대 8MB/프레임)를 깊은 복사하므로, 20채널 중
+    // 스크롤 밖·숨김 타일까지 매 펄스(30Hz) 복사하면 불필요한 메모리 대역폭이 든다.
+    //   • isVisible()==false: 다른 그리드 페이지로 hide()된 타일.
+    //   • visibleRegion().isEmpty(): 스크롤 영역 안에서 뷰포트 밖으로 스크롤된 타일.
+    // 보이는 타일만 폴링해 무용한 복사를 제거한다. 다시 보이면 m_seq 가드로 최신 프레임을
+    // 즉시 받아 그린다(상태 손실 없음). (zero-copy GPU 경로여도 동반 RGBA 복사가 슬롯
+    // latest()에서 일어나므로 효과가 있다.)
+    if (!isVisible() || visibleRegion().isEmpty()) return;
+
     // IFrameSurfaceRegistry 포트로 최신 서피스 조회 (CpuRgba / GpuTexture 모두).
     nv::app::FrameSurface surface;
     if (!m_registry.latestSurface(m_channelId, surface, m_seq)) return;

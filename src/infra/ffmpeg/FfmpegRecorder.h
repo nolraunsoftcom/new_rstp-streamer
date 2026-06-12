@@ -1,6 +1,11 @@
 #pragma once
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <thread>
 
 extern "C" {
 #include <libavutil/avutil.h>   // AV_NOPTS_VALUE
@@ -29,10 +34,22 @@ namespace nv::infra {
 // 세그먼트 롤오버: 이 클래스는 단일 파일 remux만 책임진다. 롤오버는 호출측
 // (RecordingController, Task4)이 stop() 후 새 경로로 start()를 호출해 구현한다.
 //
-// 스레드: writePacket은 디코드 스레드에서 인라인으로 불릴 수 있다(remux는 가볍다).
-// av_interleaved_write_frame은 디스크 I/O로 블로킹될 수 있으나 M3에서는 인라인 허용.
-// 향후 큐잉이 가능하도록 인터페이스는 깔끔히 유지한다(블로킹 측정은 Task6).
-// 이 클래스 자체는 스레드 안전하지 않다 — 한 인스턴스는 한 스레드에서만 사용한다.
+// 스레드(D8 비동기 쓰기 큐): writePacket은 디코드 스레드에서 호출되며, rescale/오프셋만
+// 적용한 패킷 복사본을 유한 큐에 넣고 즉시 반환한다 — 블로킹 디스크 I/O
+// (av_interleaved_write_frame)는 전용 쓰기 스레드가 수행한다. 느린 저장소(USB HDD/네트워크
+// 마운트)에서도 디코드 핫루프가 막히지 않는다.
+//
+// 큐 유한·드랍 정책: 큐가 가득 차면 가장 오래된 비키프레임 패킷을 드랍한다(GOP 단위 — 유인·
+// 단기 녹화라 드랍 수용). 드랍 수를 카운트해 stop 시 1회 로그한다. 키프레임은 보존하려
+// 노력하되 큐가 키프레임으로만 차면(degenerate) 가장 오래된 것을 드랍한다.
+//
+// 격리(D8): 쓰기 스레드의 mux 실패는 m_errored(atomic)만 세우고 예외를 던지지 않는다 —
+// 디코드 스레드(writePacket)로 전파되지 않는다. 디코드는 계속 큐에 넣되 hadError()로 진단.
+//
+// 수명/스레드 안전: start()가 쓰기 스레드를 띄우고, stop()이 큐를 flush한 뒤 스레드를 join하고
+// 트레일러를 쓴다. 패킷 소유권은 큐가 가진다(enqueue 시 이전된 AVPacket*를 쓰기 스레드가
+// av_packet_free). writePacket/start/stop은 한 스레드(디코드)에서만 호출한다 — 큐 뮤텍스가
+// 디코드↔쓰기 스레드 간 패킷 핸드오프를 보호한다.
 class FfmpegRecorder {
 public:
     FfmpegRecorder() = default;
@@ -58,18 +75,32 @@ public:
     bool isRecording() const { return m_open; }
 
     // 오류 플래그가 한 번이라도 섰는지(격리 진단용). start 성공으로 리셋.
-    bool hadError() const { return m_errored; }
+    // 쓰기 스레드가 set하고 디코드 스레드가 read하므로 atomic.
+    bool hadError() const { return m_errored.load(); }
 
 private:
-    void cleanup();   // 부분/완전 자원 해제 (멱등)
+    void cleanup();        // 부분/완전 자원 해제 (멱등) — 쓰기 스레드 종료 후에만 호출
+    void writerLoop();     // 전용 쓰기 스레드: 큐에서 패킷을 꺼내 mux (블로킹 I/O 격리)
+    void stopWriter();     // 쓰기 스레드에 종료 신호 + join (큐 flush는 호출 전 보장)
+    void dropOldestNonKeyLocked();  // 큐 가득 시 가장 오래된 비키프레임 드랍 (m_qMu 보유 가정)
 
     AVFormatContext* m_fmt = nullptr;
     int m_outStreamIndex = -1;
     AVRational m_inTimeBase{0, 1};   // 입력 stream time_base 보관(rescale용)
     bool m_open = false;
     bool m_gotKeyframe = false;
-    bool m_errored = false;
+    std::atomic<bool> m_errored{false};
     int64_t m_firstPts = AV_NOPTS_VALUE;   // 첫 키프레임 pts(입력 timebase) — 0 오프셋 기준
+
+    // ── D8 비동기 쓰기 큐 ────────────────────────────────────────────────────
+    // 큐 상한: 30fps 기준 ~2초 분량. 느린 저장소에서 디코드 핫루프 보호 + 메모리 상한.
+    static constexpr size_t kMaxQueue = 60;
+    std::thread             m_writer;
+    std::mutex              m_qMu;
+    std::condition_variable m_qCv;
+    std::deque<AVPacket*>   m_queue;        // 쓰기 대기 패킷(소유 — 쓰기 스레드가 free)
+    bool                    m_writerStop = false;  // m_qMu 보호: stop 신호
+    uint64_t                m_droppedPackets = 0;  // m_qMu 보호: 큐 가득으로 드랍한 패킷 수
 };
 
 } // namespace nv::infra

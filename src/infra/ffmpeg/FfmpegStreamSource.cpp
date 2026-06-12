@@ -209,11 +209,17 @@ void FfmpegStreamSource::serviceRecording(AVStream* inputStream, const AVPacket*
         m_recorder = std::move(rec);
         m_currentPath = path;
         m_recording.store(true);
+        m_recordError.store(false);   // D10: 새 세그먼트 — 이전 오류 미러 초기화
     }
 
     // 활성 레코더에 현재(디코더로 갈) 패킷을 기록 — FfmpegRecorder가 내부에서 av_packet_ref로
     // 복제하므로 원본 pkt는 변경되지 않고 디코더로 그대로 보낼 수 있다(화면=녹화 일치).
-    if (m_recorder && pkt != nullptr) m_recorder->writePacket(pkt);
+    if (m_recorder && pkt != nullptr) {
+        m_recorder->writePacket(pkt);
+        // D10: 쓰기 오류(디스크 풀 등)를 control 스레드가 읽을 수 있도록 atomic에 미러.
+        // 디코드 루프는 계속 돈다(격리) — 가시화는 RecordingController reconcile가 담당.
+        if (m_recorder->hadError()) m_recordError.store(true);
+    }
 }
 
 // 활성 레코더 세그먼트를 종료한다(stop + 소멸). 디코드 스레드에서만 호출.
@@ -224,6 +230,7 @@ void FfmpegStreamSource::finishRecorder() {
     }
     m_currentPath.clear();
     m_recording.store(false);
+    m_recordError.store(false);   // D10: 세그먼트 종료 — 다음 레코더가 자기 상태를 새로 보고
 }
 
 void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* listener) {
