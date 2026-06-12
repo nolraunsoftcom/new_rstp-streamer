@@ -7,8 +7,10 @@
 
 namespace nv::ui {
 
-VideoTileWidget::VideoTileWidget(nv::infra::LatestSurfaceSlot& slot, QWidget* parent)
-    : QWidget(parent), m_slot(slot) {
+VideoTileWidget::VideoTileWidget(nv::app::IFrameSurfaceRegistry& registry,
+                                 std::string channelId,
+                                 QWidget* parent)
+    : QWidget(parent), m_registry(registry), m_channelId(std::move(channelId)) {
     setMinimumSize(320, 240);
 
     m_layout = new QVBoxLayout(this);
@@ -51,19 +53,19 @@ void VideoTileWidget::fallbackToSw() {
 
 void VideoTileWidget::pollFrame() {
     if (m_renderer == nullptr) return;
-    // RGBA 폴링 경로 사용 — GpuTexture 서피스도 B4가 동반 RGBA를 채우므로 그대로 그린다.
-    // (GPU 핸들 직행/zero-copy는 후속 — 여기선 CVPixelBuffer ref 수명 관리가 필요 없어 누수 없음.)
-    nv::infra::LatestSurfaceSlot::Frame f;
-    if (!m_slot.latest(f, m_seq)) return;
-    m_seq = f.seq;
-
+    // IFrameSurfaceRegistry 포트로 최신 서피스 조회 (CpuRgba / GpuTexture 모두).
+    // 현재 렌더러는 RGBA만 그리며(zero-copy는 Task3), GpuTexture면 동반 RGBA로 그린다.
     nv::app::FrameSurface surface;
-    surface.kind = nv::app::FrameSurface::Kind::CpuRgba;
-    surface.width = f.width;
-    surface.height = f.height;
-    surface.seq = f.seq;
-    surface.rgba = std::move(f.rgba);
+    if (!m_registry.latestSurface(m_channelId, surface, m_seq)) return;
+    m_seq = surface.seq;
+
     m_renderer->present(surface);
+
+    // GpuTexture 핸들은 그린 직후 반납 (Task3에서 in-flight 보관으로 정교화).
+    if (surface.kind == nv::app::FrameSurface::Kind::GpuTexture &&
+        surface.gpuHandle != nullptr) {
+        m_registry.releaseConsumed(m_channelId, surface.gpuHandle);
+    }
 }
 
 } // namespace nv::ui

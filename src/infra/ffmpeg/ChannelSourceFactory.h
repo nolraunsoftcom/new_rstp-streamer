@@ -29,6 +29,7 @@ public:
     // IFrameSurfaceRegistry — UI/렌더러가 최신 서피스를 channelId로 조회.
     bool latestSurface(const std::string& channelId, nv::app::FrameSurface& out,
                        uint64_t lastSeq) override;
+    void releaseConsumed(const std::string& channelId, void* handle) override;
 
     LatestSurfaceSlot* slot(const std::string& channelId);   // UI 조회용 (없으면 nullptr)
     std::vector<std::string> slotIds();                      // 통계용 슬롯 키 목록 (뮤텍스 보호)

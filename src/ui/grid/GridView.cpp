@@ -12,8 +12,6 @@
 #include <QScrollBar>
 #include <QVBoxLayout>
 #include "src/domain/layout/GridRules.h"
-#include "src/infra/ffmpeg/ChannelSourceFactory.h"
-#include "src/infra/video/LatestSurfaceSlot.h"
 #include "src/ui/grid/VideoTileWidget.h"
 #include "src/ui/common/Confirm.h"
 
@@ -61,7 +59,7 @@ struct GridView::Tile : public QWidget {
     std::string      channelId;
     QString          name;
 
-    Tile(nv::infra::LatestSurfaceSlot& slot, std::string id, QString nm, QWidget* parent)
+    Tile(nv::app::IFrameSurfaceRegistry& registry, std::string id, QString nm, QWidget* parent)
         : QWidget(parent), channelId(std::move(id)), name(std::move(nm))
     {
         auto* mainLay = new QVBoxLayout(this);
@@ -111,7 +109,7 @@ struct GridView::Tile : public QWidget {
         barRow->addWidget(recBtn);
 
         // ── 영상 영역 ───────────────────────────────────────────────────
-        video = new VideoTileWidget(slot, this);
+        video = new VideoTileWidget(registry, channelId, this);
         video->setMinimumSize(160, 120);
 
         mainLay->addWidget(infoBar);
@@ -123,9 +121,9 @@ struct GridView::Tile : public QWidget {
 
 // ─────────────────────────────────────────────────────────────────────────
 
-GridView::GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb,
+GridView::GridView(nv::app::IFrameSurfaceRegistry* registry, Callbacks cb,
                    RepaintClock& repaintClock, QWidget* parent)
-    : QScrollArea(parent), m_slots(slotRegistry), m_cb(std::move(cb)),
+    : QScrollArea(parent), m_registry(registry), m_cb(std::move(cb)),
       m_repaintClock(repaintClock)
 {
     // 레거시 스크롤 영역 설정: 수직 스크롤 항상 표시(viewport 폭 진동 방지), 수평 없음, 프레임 없음, 검정 배경
@@ -326,10 +324,9 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
             tileIt->second->nameLabel->setText(qName);
         } else {
             // 신규 타일 생성
-            auto* slot = m_slots ? m_slots->slot(cfg.id) : nullptr;
-            if (slot == nullptr) continue;
+            if (m_registry == nullptr) continue;
 
-            auto* tile = new Tile(*slot, cfg.id, qName, m_content);
+            auto* tile = new Tile(*m_registry, cfg.id, qName, m_content);
             m_tiles[cfg.id] = tile;
 
             // 단일 RepaintClock tick에 pollFrame 연결 (자체 타이머 없음)

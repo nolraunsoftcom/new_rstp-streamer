@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
     gridCb.editRequested = [&](std::string id) {
         if (winPtr != nullptr) winPtr->openEditDialog(id);
     };
-    auto* grid = new nv::ui::GridView(&factory, gridCb, repaintClock);
+    auto* grid = new nv::ui::GridView(static_cast<nv::app::IFrameSurfaceRegistry*>(&factory), gridCb, repaintClock);
 
     // ChannelListPanel callbacks
     nv::ui::ChannelListPanel::Callbacks panelCb;

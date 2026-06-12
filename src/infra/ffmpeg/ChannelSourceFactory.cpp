@@ -30,6 +30,17 @@ bool ChannelSourceFactory::latestSurface(const std::string& channelId,
     return s->latest(out, lastSeq);   // 슬롯 자체 뮤텍스로 보호
 }
 
+void ChannelSourceFactory::releaseConsumed(const std::string& channelId, void* handle) {
+    LatestSurfaceSlot* s = nullptr;
+    {
+        std::lock_guard lk(m_mu);
+        auto it = m_slots.find(channelId);
+        if (it == m_slots.end()) return;
+        s = it->second.get();
+    }
+    s->releaseConsumed(handle);
+}
+
 LatestSurfaceSlot* ChannelSourceFactory::slot(const std::string& channelId) {
     std::lock_guard lk(m_mu);
     auto it = m_slots.find(channelId);
