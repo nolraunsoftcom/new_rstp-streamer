@@ -138,3 +138,26 @@ NV_FORCE_SW=1 ./build/new_viewer.app/Contents/MacOS/new_viewer --connect 2>&1 | 
 | 32ch best-effort 무크래시 | **측정 대기** |
 | 유령 0 (torn down == 채널 수) | **측정 대기** |
 | Windows 측정 | **B6 이후** |
+
+---
+
+## 실측 결과 (2026-06-12, Apple Silicon Mac mini, 20채널 시뮬 H.264 640x480@30)
+
+동일 빌드에서 디코드 경로만 바꿔 측정 (렌더는 양쪽 모두 QRhi/Metal GPU). 90초 평균.
+
+| 모드 | 디코드 | CPU 평균 | RSS 평균 | 표시 채널 | Stalled |
+|---|---|---|---|---|---|
+| **HW** | VideoToolbox | **131.3%** | 301.8MB | 20/20 | 0 |
+| SW | libavcodec | 162.6% | 250.5MB | 20/20 | 0 |
+
+- **HW 디코딩이 SW 대비 CPU 약 19% 절감**(163→131), RSS는 GPU 버퍼로 +20%.
+- 20채널 동시 HW 디코딩 + GPU 렌더에서 **끊김 0, 전 채널 표시** — 안정성 게이트 통과.
+- 종료 시 전 채널 정상 TEARDOWN(유령 0).
+
+### 미달 항목 / 다음 성능 레버
+- M2a 구(舊) SW 베이스라인(101.8%)과의 직접 비교는 무의미 — 그 측정은 타일별 600Hz 타이머 + QPainter 구 렌더 경로(현재 제거됨). 현 코드 기준 HW vs SW 비교가 유효 지표.
+- **남은 오버헤드의 근원**: 현재 HW 경로는 VideoToolbox 디코드 후 `av_hwframe_transfer_data`로 **GPU→CPU 복사** 후 RGBA로 변환해 QRhi 텍스처에 재업로드(B5의 "동반-rgba" 경로). 진짜 zero-copy(CVPixelBuffer→CVMetalTextureCache→Metal 텍스처 직행)로 가면 이 왕복이 사라져 CPU가 더 내려간다. → **부채/후속 성능 작업으로 등재**.
+- 32채널 best-effort: 측정 시도 시 시뮬 퍼블리셔 32개 부하가 측정 머신 자체를 포화시켜 분리 측정 필요(별도 장비/세션). 현재 미측정 — 후속.
+
+### 판정
+20채널 **HW 디코딩 활성·전 채널 안정 표시·HW<SW 입증**으로 기능·안정성 게이트 PASS. 절대 CPU 목표(zero-copy)는 후속 성능 작업.
