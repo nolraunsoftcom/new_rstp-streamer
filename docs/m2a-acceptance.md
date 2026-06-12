@@ -23,3 +23,15 @@
 ## 베이스라인 (M2b 게이트 기준값)
 - [ ] `./ops/measure-baseline.sh 300` 실행 → 평균 CPU/RSS를 docs/m2a-acceptance.md 결과란에 기록
 - 결과: CPU ___% / RSS ___MB / 타일 끊김 관찰 ___건 (2026-__-__ 기록)
+
+---
+
+## 자동 검증 결과 (2026-06-12 16:30, Claude 실행)
+
+- 방법: channels.json에 sim1~sim20 시딩 → `sim-20ch.sh 20` → `--connect` 자동 연결 → 2.5분 실구동
+- **20채널 동시 재생**: 20/20 세션 수립, 실구동 중 Stalled **0회**
+- **SW 베이스라인 (M2b 게이트 기준값)**: 평균 CPU **101.8%**(≈1코어, Apple Silicon), 평균 RSS **309.8MB** (n=24, 120초) — `logs/baseline-sw-20260612-1632.csv`
+- **유령 0**: SIGTERM 종료 시 MediaMTX 로그에 `torn down` **20/20** (M1 TEARDOWN 수정이 20채널 규모에서 검증됨)
+- 재시작 복원: 시딩된 20채널이 --connect로 전량 자동 복원·연결됨 (restore 경로 검증)
+- 최종 코드 리뷰: APPROVE (상세 보고서는 리뷰 에이전트 유실 — 판정만 보존)
+- UI 패리티/수동 항목: 사용자 육안 검수 대기 (앱·시뮬 가동 상태로 인계)
