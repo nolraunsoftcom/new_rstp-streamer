@@ -210,6 +210,63 @@ TEST_CASE("격리(D8): ch1 startRecording 실패가 ch2 녹화에 영향 없음"
     CHECK(sink.startCount == 1);   // ch2 start만
 }
 
+// ── onChannelRemoved: 유령 Recording 상태 방지 ───────────────────────────────
+
+TEST_CASE("onChannelRemoved: 녹화 중인 채널 삭제 시 Idle로 정리 + sink.stop 호출") {
+    Fixture f;
+    f.ctrl.toggle("ch1", "Cam1");   // Recording 상태 진입
+    REQUIRE(f.ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    f.ctrl.onChannelRemoved("ch1");
+
+    CHECK(f.sink.stopCount == 1);
+    CHECK(f.ctrl.stateOf("ch1") == RecordingState::Idle);
+}
+
+TEST_CASE("onChannelRemoved: 삭제 후 tick에서 해당 채널 무처리(유령 없음)") {
+    FakeClock clock;
+    FakeRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{60}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    ctrl.toggle("ch1", "Cam1");
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    ctrl.onChannelRemoved("ch1");
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Idle);
+
+    // maxDuration 초과 후 tick — 삭제된 채널이므로 롤오버 없음
+    clock.advance(std::chrono::seconds{120});
+    const int stopsBefore = sink.stopCount;
+    ctrl.tick();
+    CHECK(sink.stopCount == stopsBefore);   // 추가 stop 없음
+    CHECK(sink.startCount == 1);            // 최초 start만
+}
+
+TEST_CASE("onChannelRemoved: Idle 채널 삭제 시 아무 동작 안 함") {
+    Fixture f;
+    // ch1은 녹화 안 함 — Idle 상태
+    f.ctrl.onChannelRemoved("ch1");
+
+    CHECK(f.sink.stopCount == 0);
+    CHECK(f.ctrl.stateOf("ch1") == RecordingState::Idle);
+}
+
+TEST_CASE("onChannelRemoved: ch1 삭제가 ch2 녹화에 영향 없음") {
+    Fixture f;
+    f.ctrl.toggle("ch1", "Cam1");
+    f.ctrl.toggle("ch2", "Cam2");
+    REQUIRE(f.ctrl.stateOf("ch1") == RecordingState::Recording);
+    REQUIRE(f.ctrl.stateOf("ch2") == RecordingState::Recording);
+
+    f.ctrl.onChannelRemoved("ch1");
+
+    CHECK(f.ctrl.stateOf("ch1") == RecordingState::Idle);
+    CHECK(f.ctrl.stateOf("ch2") == RecordingState::Recording);
+    CHECK(f.sink.stopCount == 1);   // ch1 stop만
+}
+
 // ── 옵저버 통지 ──────────────────────────────────────────────────────────────
 
 TEST_CASE("옵저버: toggle 시 상태 변화를 통지한다") {

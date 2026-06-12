@@ -62,8 +62,10 @@ int main(int argc, char** argv) {
 
     // --- control 스레드 + 채널 매니저 ---
     std::atomic<nv::app::ChannelManager*> mgrPtr{nullptr};
-    nv::infra::ControlExecutor executor(1s, [&mgrPtr] {
+    std::atomic<nv::app::RecordingController*> recCtrlPtr{nullptr};
+    nv::infra::ControlExecutor executor(1s, [&mgrPtr, &recCtrlPtr] {
         if (auto* m = mgrPtr.load()) m->tickAll();
+        if (auto* r = recCtrlPtr.load()) r->tick();
     });
     nv::infra::ChannelSourceFactory factory(executor);
     nv::app::ChannelManager mgr{repo, factory, clock, logger,
@@ -77,6 +79,7 @@ int main(int argc, char** argv) {
         qputenv("NV_RECORD_DIR", QByteArray::fromStdString(recBaseDir));
     }
     nv::app::RecordingController recCtrl(factory, clock, logger);
+    recCtrlPtr.store(&recCtrl);
     nv::app::SnapshotService snapSvc(factory, logger);
 
     // --- UI ---
@@ -106,7 +109,10 @@ int main(int argc, char** argv) {
         });
     };
     gridCb.removeRequested = [&](std::string id) {
-        executor.post([&, id] { mgr.removeChannel(id); });
+        executor.post([&, id] {
+            recCtrl.onChannelRemoved(id);   // 유령 Recording 상태 방지 — 삭제 전 정리
+            mgr.removeChannel(id);
+        });
     };
     gridCb.swapRequested = [&](std::string a, std::string b) {
         executor.post([&, a, b] { mgr.swapGrid(a, b); });
@@ -274,6 +280,7 @@ int main(int argc, char** argv) {
 
     const int rc = QApplication::exec();
     // Fix 4: 명시적 teardown — 콜백 해제 → 채널 정리 → 큐 비움 (스택 수명 의존 제거)
+    recCtrlPtr.store(nullptr);    // tick 람다가 dangling recCtrl을 보지 않도록 drain 전에 해제
     executor.post([&] {
         mgr.setSnapshotObserver(nullptr);
         mgr.setListChangedObserver(nullptr);

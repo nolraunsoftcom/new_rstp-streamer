@@ -32,6 +32,10 @@ public:
     // (분리 정책 splitOnReconnect가 false면 아무 동작 안 함.)
     void onReconnect(const std::string& channelId, const std::string& channelName);
 
+    // 채널 삭제 알림: 녹화 중이면 내부 상태를 Idle로 정리해 유령 Recording 방지.
+    // sink.stopRecording은 best-effort(소스가 곧 파괴됨). m_channels에서 항목 제거.
+    void onChannelRemoved(const std::string& channelId);
+
     // 주기 호출: maxDuration 초과 채널의 세그먼트를 롤오버(stop + 새 경로로 start).
     void tick();
 

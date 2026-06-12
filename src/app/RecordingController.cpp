@@ -115,6 +115,17 @@ void RecordingController::toggle(const std::string& channelId,
     }
 }
 
+void RecordingController::onChannelRemoved(const std::string& channelId) {
+    auto it = m_channels.find(channelId);
+    if (it == m_channels.end()) return;
+    if (it->second.state == nv::domain::RecordingState::Recording) {
+        // best-effort: 소스가 곧 파괴되므로 실패 가능, 유령 상태 방지가 핵심
+        m_sink.stopRecording(channelId);
+        notify(channelId, nv::domain::RecordingState::Idle);
+    }
+    m_channels.erase(it);
+}
+
 void RecordingController::onReconnect(const std::string& channelId,
                                       const std::string& channelName) {
     if (!m_policy.splitOnReconnect) return;
