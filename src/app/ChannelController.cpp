@@ -52,18 +52,26 @@ void ChannelController::setObserver(std::function<void(const ChannelSnapshot&)> 
 void ChannelController::notifyIfChanged() {
     if (!m_observer) return;
     ChannelSnapshot s{m_sm.state(), m_sm.reconnectAttempts(), m_sm.lastReason(), m_health};
+    s.packetsPerSec = m_packetsPerSec;
+    s.msSinceLastPacket =
+        m_lastPacketAt ? std::chrono::duration_cast<std::chrono::milliseconds>(
+                             m_clock.now() - *m_lastPacketAt)
+                             .count()
+                       : -1;
     if (s == m_lastSnapshot) return;
     m_lastSnapshot = s;
     m_observer(s);
 }
 
 void ChannelController::connect() {
+    m_lastRateAt = m_clock.now(); m_packetsInWindow = 0; m_lastPacketAt.reset(); m_packetsPerSec = 0.0;
     apply(m_sm.connectRequested(m_clock.now()));
     logTransition("connect");
     notifyIfChanged();
 }
 
 void ChannelController::disconnect() {
+    m_lastRateAt = m_clock.now(); m_packetsInWindow = 0; m_lastPacketAt.reset(); m_packetsPerSec = 0.0;
     apply(m_sm.disconnectRequested(m_clock.now()));
     logTransition("disconnect");
     notifyIfChanged();
@@ -83,6 +91,15 @@ void ChannelController::notifySourceAvailable() {
 }
 
 void ChannelController::tick() {
+    const auto now = m_clock.now();
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastRateAt).count();
+    if (elapsedMs > 0) {
+        m_packetsPerSec = m_packetsInWindow * 1000.0 / static_cast<double>(elapsedMs);
+        m_packetsInWindow = 0;
+        m_lastRateAt = now;
+    }
+
     const auto before = m_sm.state();
     auto t = m_sm.tick(m_clock.now());
     if (m_sm.state() != before) {
@@ -112,6 +129,7 @@ void ChannelController::onSessionOpened() {
 
 void ChannelController::onPacketReceived() {
     if (!m_sourceAlive) return;
+    ++m_packetsInWindow; m_lastPacketAt = m_clock.now();
     apply(m_sm.packetReceived(m_clock.now()));
     m_health.markReached(HealthStage::PacketFlow);
     notifyIfChanged();

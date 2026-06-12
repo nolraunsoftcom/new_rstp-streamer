@@ -40,6 +40,9 @@ MainWindow::MainWindow(nv::infra::LatestFrameSlot& slot, Commands commands)
     diag->addStretch(1);
     root->addLayout(diag);
 
+    m_flow = new QLabel(QStringLiteral("패킷 — (수신 이력 없음)"), central);
+    root->addWidget(m_flow);
+
     m_status = new QLabel(QStringLiteral("Idle"), central);
     root->addWidget(m_status);
 
@@ -53,7 +56,8 @@ MainWindow::MainWindow(nv::infra::LatestFrameSlot& slot, Commands commands)
     connect(btnRetry, &QPushButton::clicked, this, [this] { m_commands.retry(); });
 }
 
-void MainWindow::onSnapshot(QString state, int attempts, QString reason, QList<int> stages) {
+void MainWindow::onSnapshot(QString state, int attempts, QString reason, QList<int> stages,
+                            double pps, qlonglong msSince) {
     m_status->setText(QStringLiteral("%1 | 시도 %2 | %3").arg(state).arg(attempts).arg(reason));
     for (int i = 0; i < stages.size() && i < m_stageLabels.size(); ++i) {
         const int s = stages[i];
@@ -61,6 +65,16 @@ void MainWindow::onSnapshot(QString state, int attempts, QString reason, QList<i
                                       .arg(QString::fromUtf8(kStageMark[s]))
                                       .arg(QString::fromUtf8(kStageNames[i])));
         m_stageLabels[i]->setStyleSheet(QStringLiteral("color:%1").arg(kStageColor[s]));
+    }
+    if (msSince < 0) {
+        m_flow->setText(QStringLiteral("패킷 — (수신 이력 없음)"));
+        m_flow->setStyleSheet(QStringLiteral("color:gray"));
+    } else {
+        m_flow->setText(QStringLiteral("패킷 %1/s · 마지막 %2초 전")
+                            .arg(pps, 0, 'f', 1)
+                            .arg(msSince / 1000.0, 0, 'f', 1));
+        const char* color = (msSince < 1000) ? "limegreen" : (msSince < 3000) ? "orange" : "red";
+        m_flow->setStyleSheet(QStringLiteral("color:%1; font-weight:bold").arg(color));
     }
 }
 

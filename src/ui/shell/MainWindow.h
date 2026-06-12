@@ -23,12 +23,14 @@ public:
     VideoTileWidget* tile() { return m_tile; }
 
 public slots:
-    void onSnapshot(QString state, int attempts, QString reason, QList<int> stages);
+    void onSnapshot(QString state, int attempts, QString reason, QList<int> stages,
+                    double pps, qlonglong msSince);
 
 private:
     Commands m_commands;
     VideoTileWidget* m_tile = nullptr;
     QLineEdit* m_url = nullptr;
+    QLabel* m_flow = nullptr;
     QLabel* m_status = nullptr;
     QList<QLabel*> m_stageLabels;
 };

@@ -18,11 +18,13 @@ public:
                              s.attempts,
                              QString::fromUtf8(toString(s.reason).data(),
                                                static_cast<int>(toString(s.reason).size())),
-                             stages);
+                             stages, s.packetsPerSec,
+                             static_cast<qlonglong>(s.msSinceLastPacket));
     }
 
 signals:
-    void snapshotChanged(QString state, int attempts, QString reason, QList<int> stages);
+    void snapshotChanged(QString state, int attempts, QString reason, QList<int> stages,
+                         double pps, qlonglong msSinceLastPacket);
 };
 
 } // namespace nv::ui

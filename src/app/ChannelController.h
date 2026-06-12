@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <optional>
 #include <string>
 #include "src/domain/connection/ConnectionStateMachine.h"
 #include "src/domain/health/StreamHealth.h"
@@ -54,6 +55,11 @@ private:
     bool m_sourceAlive = false;   // close 이후 늦은 이벤트 차단
     std::function<void(const ChannelSnapshot&)> m_observer;
     ChannelSnapshot m_lastSnapshot;
+
+    int m_packetsInWindow = 0;
+    std::optional<std::chrono::steady_clock::time_point> m_lastPacketAt;
+    std::chrono::steady_clock::time_point m_lastRateAt{};
+    double m_packetsPerSec = 0.0;
 };
 
 } // namespace nv::app
