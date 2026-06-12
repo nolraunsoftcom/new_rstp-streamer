@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <cstdio>
 
 namespace nv::infra {
 
@@ -37,6 +38,12 @@ std::vector<ChannelConfig> JsonChannelRepository::load() {
     // 신버전: 최상위가 객체이고 "channels" 배열이 있으면 그것을 읽음
     if (doc.isObject()) {
         const auto obj = doc.object();
+        const int ver = obj.value("version").toInt(1);
+        if (ver > 1) {
+            std::fprintf(stderr, "[JsonChannelRepository] 미래 버전(v%d) 파일 — 로드/저장 거부(데이터 보호)\n", ver);
+            m_refuseSave = true;   // 이후 save()를 무동작으로 막아 덮어쓰기 방지
+            return {};
+        }
         if (obj.contains("channels") && obj.value("channels").isArray())
             return parseArray(obj.value("channels").toArray());
     }
@@ -45,6 +52,7 @@ std::vector<ChannelConfig> JsonChannelRepository::load() {
 }
 
 bool JsonChannelRepository::save(const std::vector<ChannelConfig>& channels) {
+    if (m_refuseSave) return false;   // R7: 미래 버전 파일 보호 — 덮어쓰기 거부
     QJsonArray arr;
     for (const auto& c : channels) {
         QJsonObject o;

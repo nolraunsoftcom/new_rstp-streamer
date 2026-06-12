@@ -17,6 +17,7 @@ SoakLogger::SoakLogger(ChannelSourceFactory& factory, QString csvPath, QObject* 
 
 void SoakLogger::start(int intervalMs)
 {
+    m_intervalMs = intervalMs;   // R5: fps 계산에 사용하기 위해 보존
     m_timer.start(intervalMs);
 }
 
@@ -55,8 +56,8 @@ void SoakLogger::onTimer()
             if (s->latest(f, seq)) seq = f.seq;
             const uint64_t prev = m_lastSeqs[id];
             if (seq > prev) {
-                // interval은 start()의 intervalMs와 일치하도록 60.0 고정
-                fpsTotal += static_cast<double>(seq - prev) / 60.0;
+                // fps = frames / interval(s) — 하드코딩 60 대신 실제 인터벌 사용 (R5)
+                fpsTotal += static_cast<double>(seq - prev) / (m_intervalMs / 1000.0);
                 ++active;
             }
             m_lastSeqs[id] = seq;

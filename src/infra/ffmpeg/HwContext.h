@@ -40,6 +40,12 @@ public:
 
     bool active() const { return m_deviceCtx != nullptr; }
 
+    // 플랫폼별 GPU 네이티브 핸들 추출.
+    // macOS: data[3] = CVPixelBufferRef (VideoToolbox)
+    // Windows: data[0] = ID3D11Texture2D* (data[1]은 텍스처 배열 인덱스)
+    // 그 외: nullptr
+    static void* extractGpuHandle(const AVFrame* frame);
+
 private:
     // get_format 콜백: hw_pix_fmt가 후보에 있으면 그것을, 없으면 첫 SW 포맷 폴백.
     static AVPixelFormat getFormat(AVCodecContext* ctx, const AVPixelFormat* fmts);

@@ -9,7 +9,7 @@
 | 3 | 통합 테스트 고정 sleep | 서버 1.5s/퍼블리셔 0.8s 대기 — 느린 CI에서 flaky 소지. 포트 폴링으로 전환 필요 | CI 도입 시 (M5) |
 | 4 | 해제 후 정지화면 잔류 | disconnect 후 LatestFrameSlot에 마지막 프레임이 남아 화면 유지. 상태 표시가 있어 오인 위험 낮음 | M2 (UI 개선) |
 | 5 | UI 채널 목록 3중 캐시 | MainWindow/GridView/ChannelListPanel 수동 동기화 | M3 (UI 모델 단일화) |
-| 6 | GridView→infra 직접 의존 | 슬롯 조회 포트 부재 (헥사고날 위반) | **해소(M2b)**: IFrameSurfaceRegistry 포트 도입, GridView가 포트에만 의존 |
+| 6 | GridView→infra 직접 의존 | 슬롯 조회 포트 부재 (헥사고날 위반) | **부분 해소(M2b)**: 포트(IFrameSurfaceRegistry)는 추가됐으나 GridView가 아직 concrete ChannelSourceFactory.slot() 사용. UI 전환은 zero-copy 작업과 함께 |
 | 7 | nextGridIndex O(n²)·전량 재직렬화 | 20~32ch 무시 가능 | 채널 수 확장 시 |
 | 8 | 슬롯 레지스트리 무한 증가 | destroySource no-op + chN ID 미재사용 — 추가/삭제 반복 시 슬롯 누적 | M2b (IFrameSurfaceRegistry 포트화 시 수명 정리) |
 | 9 | soak.csv 무한 append·상대경로 | 회전/상한 없음 | M2b ride-along (SoakLogger 추출) |
@@ -33,3 +33,6 @@
 | 17 | GPU framePainted 가시성 의존 | RhiVideoRenderer.render()가 compositing 시에만 호출 → 오프스크린/최소화 창은 표시단계 미확정(구 SW paintEvent도 동일 특성, 회귀 아님) | M3 (필요 시 보정) |
 | 18 | 저장 실패 UI 미표시 | save 실패가 로그 한 줄뿐 — 상태바/다이얼로그 미반영 | M3 (UI 알림) |
 | 19 | placeholder 풀 미축소 | hide만, 최대 셀 수로 유한 | 경미, 보류 |
+| 20 | 렌더러 RHI 프로브 미캐시 | selectRendererKind(true) 하드코딩, 타일별 폴백·미전역캐시 | zero-copy 묶음 |
+| 21 | present() 중복 + 프레임당 2번째 QImage 카피 | Rhi/Sw 8줄 복제, 초당 600 카피 | zero-copy 묶음 |
+| 22 | HW transfer 실패 시 슬롯 직전 핸들 잔존 | seq 가드로 무해, 불변량 흐림 | zero-copy 묶음 |

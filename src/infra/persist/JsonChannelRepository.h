@@ -13,6 +13,7 @@ public:
 
 private:
     std::string m_path;
+    bool m_refuseSave = false;   // R7: 미래 버전 파일 로드 시 set → save 무동작으로 데이터 보호
 };
 
 } // namespace nv::infra

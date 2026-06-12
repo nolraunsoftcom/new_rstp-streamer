@@ -196,7 +196,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
             void* gpuHandle = nullptr;
 
             if (isHwFrame) {
-                gpuHandle = frm->data[3];   // VideoToolbox: CVPixelBufferRef
+                gpuHandle = HwContext::extractGpuHandle(frm);   // R3: 플랫폼별 GPU 핸들
                 av_frame_unref(swf);
                 if (av_hwframe_transfer_data(swf, frm, 0) == 0) {
                     src = swf;

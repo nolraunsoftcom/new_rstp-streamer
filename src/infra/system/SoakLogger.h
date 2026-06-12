@@ -17,7 +17,7 @@ public:
     explicit SoakLogger(ChannelSourceFactory& factory, QString csvPath,
                         QObject* parent = nullptr);
 
-    void start(int intervalMs = 60'000);
+    void start(int intervalMs = 60'000);   // intervalMs는 멤버에 저장 → fps 계산에 사용
     void stop();
 
 private slots:
@@ -32,6 +32,7 @@ private:
     std::map<std::string, uint64_t> m_lastSeqs;
 
     static constexpr qint64 kMaxFileSizeBytes = 10LL * 1024 * 1024; // 10 MB
+    int m_intervalMs = 60'000;   // R5: start()의 인자 보존 → fps = frames / (intervalMs/1000)
 };
 
 } // namespace nv::infra
