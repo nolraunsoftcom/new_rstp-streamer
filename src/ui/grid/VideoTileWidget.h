@@ -1,7 +1,7 @@
 #pragma once
 #include <QImage>
 #include <QWidget>
-#include "src/infra/video/LatestFrameSlot.h"
+#include "src/infra/video/LatestSurfaceSlot.h"
 
 namespace nv::ui {
 
@@ -12,7 +12,7 @@ namespace nv::ui {
 class VideoTileWidget : public QWidget {
     Q_OBJECT
 public:
-    explicit VideoTileWidget(nv::infra::LatestFrameSlot& slot, QWidget* parent = nullptr);
+    explicit VideoTileWidget(nv::infra::LatestSurfaceSlot& slot, QWidget* parent = nullptr);
 
 signals:
     void framePainted();
@@ -24,7 +24,7 @@ protected:
     void paintEvent(QPaintEvent* ev) override;
 
 private:
-    nv::infra::LatestFrameSlot& m_slot;
+    nv::infra::LatestSurfaceSlot& m_slot;
     QImage m_image;
     uint64_t m_seq = 0;
     bool m_paintedNew = false;

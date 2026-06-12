@@ -4,7 +4,7 @@
 #include <QFileInfo>
 #include <chrono>
 #include <cstdio>
-#include "src/infra/video/LatestFrameSlot.h"
+#include "src/infra/video/LatestSurfaceSlot.h"
 #include "src/infra/system/ProcessStats.h"
 
 namespace nv::infra {
@@ -50,7 +50,7 @@ void SoakLogger::onTimer()
     int active = 0;
     for (const auto& id : m_factory.slotIds()) {
         if (auto* s = m_factory.slot(id)) {
-            LatestFrameSlot::Frame f;
+            LatestSurfaceSlot::Frame f;
             uint64_t seq = m_lastSeqs[id];
             if (s->latest(f, seq)) seq = f.seq;
             const uint64_t prev = m_lastSeqs[id];

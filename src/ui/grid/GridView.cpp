@@ -11,7 +11,7 @@
 #include <QVBoxLayout>
 #include "src/domain/layout/GridRules.h"
 #include "src/infra/ffmpeg/ChannelSourceFactory.h"
-#include "src/infra/video/LatestFrameSlot.h"
+#include "src/infra/video/LatestSurfaceSlot.h"
 #include "src/ui/grid/VideoTileWidget.h"
 
 namespace nv::ui {
@@ -58,7 +58,7 @@ struct GridView::Tile : public QWidget {
     std::string      channelId;
     QString          name;
 
-    Tile(nv::infra::LatestFrameSlot& slot, std::string id, QString nm, QWidget* parent)
+    Tile(nv::infra::LatestSurfaceSlot& slot, std::string id, QString nm, QWidget* parent)
         : QWidget(parent), channelId(std::move(id)), name(std::move(nm))
     {
         auto* mainLay = new QVBoxLayout(this);

@@ -21,6 +21,7 @@ add_library(nv_infra STATIC
   infra/system/ControlExecutor.cpp
   infra/system/SoakLogger.cpp
   infra/ffmpeg/FfmpegStreamSource.cpp
+  infra/ffmpeg/HwContext.cpp
   infra/ffmpeg/ChannelSourceFactory.cpp
   infra/persist/JsonChannelRepository.cpp
   infra/system/ResourceMonitor.cpp
@@ -28,6 +29,11 @@ add_library(nv_infra STATIC
 target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
 target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG Qt6::Core)
 target_compile_options(nv_infra PRIVATE -Wall -Wextra -Wpedantic)
+
+# macOS: VideoToolbox HW 디코딩 — CVPixelBuffer 수명 관리에 CoreVideo 필요.
+if(APPLE)
+  target_link_libraries(nv_infra PUBLIC "-framework CoreVideo")
+endif()
 
 set(CMAKE_AUTORCC ON)
 
