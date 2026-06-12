@@ -1,4 +1,5 @@
 #include "HwContext.h"
+#include <cstdio>
 #include <cstdlib>
 
 namespace nv::infra {
@@ -36,8 +37,14 @@ AVPixelFormat HwContext::getFormat(AVCodecContext* ctx, const AVPixelFormat* fmt
 bool HwContext::init(AVCodecContext* dec, const AVCodec* codec) {
     // NV_FORCE_SW=1 이면 HW 디코딩을 강제 비활성화 — 성능 비교·문제 진단용 영구 스위치.
     // 기본(미설정) 실행에는 영향 없음.
-    if (std::getenv("NV_FORCE_SW") != nullptr) return false;
-    if (kHwType == AV_HWDEVICE_TYPE_NONE) return false;
+    if (std::getenv("NV_FORCE_SW") != nullptr) {
+        std::fprintf(stderr, "[HwContext] SW forced (NV_FORCE_SW)\n");
+        return false;
+    }
+    if (kHwType == AV_HWDEVICE_TYPE_NONE) {
+        std::fprintf(stderr, "[HwContext] HW unsupported on this platform\n");
+        return false;
+    }
 
     // 1) 이 코덱이 타깃 디바이스 타입을 hw_device_ctx 방식으로 지원하는지 찾는다.
     AVPixelFormat hwPix = AV_PIX_FMT_NONE;
@@ -50,11 +57,16 @@ bool HwContext::init(AVCodecContext* dec, const AVCodec* codec) {
             break;
         }
     }
-    if (hwPix == AV_PIX_FMT_NONE) return false;   // 이 코덱+디바이스 조합 미지원
+    if (hwPix == AV_PIX_FMT_NONE) {
+        std::fprintf(stderr, "[HwContext] codec has no HW pixfmt for this device\n");
+        return false;   // 이 코덱+디바이스 조합 미지원
+    }
 
     // 2) hw 디바이스 컨텍스트 생성.
     AVBufferRef* devCtx = nullptr;
-    if (av_hwdevice_ctx_create(&devCtx, kHwType, nullptr, nullptr, 0) < 0) {
+    const int createRc = av_hwdevice_ctx_create(&devCtx, kHwType, nullptr, nullptr, 0);
+    if (createRc < 0) {
+        std::fprintf(stderr, "[HwContext] hwdevice create failed (rc=%d)\n", createRc);
         return false;   // 디바이스 없음/생성 실패 → SW 폴백
     }
 
@@ -64,7 +76,23 @@ bool HwContext::init(AVCodecContext* dec, const AVCodec* codec) {
     dec->opaque = this;
     dec->get_format = &HwContext::getFormat;
     dec->hw_device_ctx = av_buffer_ref(m_deviceCtx);
+    if (dec->hw_device_ctx == nullptr) {
+        std::fprintf(stderr, "[HwContext] av_buffer_ref failed — falling back to SW\n");
+        return false;   // SW 폴백 (devCtx는 멤버이므로 소멸 시 정리)
+    }
     return true;
+}
+
+// 플랫폼별 GPU 네이티브 핸들 추출 (R3: data[3] 직접 사용 대신 이 함수 경유).
+void* HwContext::extractGpuHandle(const AVFrame* frame) {
+#if defined(__APPLE__)
+    return frame->data[3];   // VideoToolbox CVPixelBufferRef
+#elif defined(_WIN32)
+    return frame->data[0];   // D3D11 ID3D11Texture2D* (data[1]은 텍스처 배열 인덱스)
+#else
+    (void)frame;
+    return nullptr;
+#endif
 }
 
 } // namespace nv::infra
