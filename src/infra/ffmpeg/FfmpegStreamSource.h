@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <thread>
 #include "src/app/ports/IStreamSource.h"
@@ -26,6 +27,7 @@ private:
     LatestFrameSlot& m_frameSlot;
     std::thread m_thread;
     std::atomic<bool> m_stop{false};
+    std::atomic<int64_t> m_graceUntilMs{0};  // close 중 TEARDOWN 송신 허용 데드라인 (steady ms)
 };
 
 } // namespace nv::infra

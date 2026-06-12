@@ -1,9 +1,13 @@
 #include <QApplication>
 #include <QDir>
+#include <QSocketNotifier>
 #include <QTimer>
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
+#include <sys/socket.h>
+#include <unistd.h>
 #include "src/app/ChannelController.h"
 #include "src/app/MarshallingStreamSource.h"
 #include "src/infra/ffmpeg/FfmpegStreamSource.h"
@@ -17,6 +21,14 @@
 #include "src/ui/shell/MainWindow.h"
 
 using namespace std::chrono_literals;
+
+namespace {
+int g_sigFd[2] = {-1, -1};
+void onUnixSignal(int) {
+    const char b = 1;
+    (void)::write(g_sigFd[0], &b, 1);   // async-signal-safe
+}
+} // namespace
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
@@ -79,6 +91,17 @@ int main(int argc, char** argv) {
     });
     QDir().mkpath(QStringLiteral("logs"));
     statsTimer.start(60'000);
+
+    // SIGTERM/SIGINT에도 정상 종료 시퀀스(disconnect→TEARDOWN)를 거친다 — 유령 세션 방지
+    ::socketpair(AF_UNIX, SOCK_STREAM, 0, g_sigFd);
+    std::signal(SIGINT, onUnixSignal);
+    std::signal(SIGTERM, onUnixSignal);
+    QSocketNotifier sigNotifier(g_sigFd[1], QSocketNotifier::Read);
+    QObject::connect(&sigNotifier, &QSocketNotifier::activated, &app, [] {
+        char b;
+        (void)::read(g_sigFd[1], &b, 1);
+        QApplication::quit();
+    });
 
     win.show();
     if (QApplication::arguments().contains(QStringLiteral("--connect"))) {
