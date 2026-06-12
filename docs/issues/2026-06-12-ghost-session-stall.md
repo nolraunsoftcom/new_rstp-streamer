@@ -88,3 +88,9 @@ if (removed > 0){
 
 - viewer 평가: 이 이슈 동안 15/15 무개입 자동 복구, 진단 코드 일관(NoPackets), 자원 누수 없음 — 클라이언트 견고성 목표는 충족. 패킷 흐름 실시간 표시(`82bd1a8`)로 이후 관찰은 즉시 가시화됨.
 - 데이터: `logs/viewer-1h-20260612-1032.log`, `logs/device-1h-20260612-1032.log`, `logs/csv-1h-20260612-1032.csv`, `logs/netstat-1h-20260612-1032.log`
+
+## 추가 사건 (2026-06-12 저녁): 신규 유령 공급 경로 — UI 행(hang)
+
+- 20:18경 M2a 앱(채널 2개)이 종료 신호 처리 중 **GridView resize↔relayout 진동 루프**로 UI 스레드 행 → SIGTERM 정상 종료 경로 불능 → 유령 2개 → 60초 후 청소가 신규 인스턴스 스트림을 20초 정지시킴 (행 리포트: `/Library/Logs/DiagnosticReports/new_viewer_2026-06-12-201912_*.hang`, 41샘플 전부 relayout 루프).
+- 수정(`94dfbc4`): 수직 스크롤바 상시 표시(진동 근원인 스크롤바 토글 차단) + relayout 재진입 가드 + 리사이즈 코얼레싱(0ms 싱글샷). SIGTERM 정상 종료(GRACEFUL-OK)·유령 0 재검증.
+- 교훈: 유령 방지는 TEARDOWN 경로만이 아니라 **"종료 경로가 막히지 않음"까지 포함**해야 한다. UI 행 = 유령 생산자.
