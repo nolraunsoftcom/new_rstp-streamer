@@ -1,6 +1,6 @@
 # 이슈: 유령 RTSP 세션 청소 시점에 현재 스트림이 멈춤 (직결, voxl-streamer)
 
-상태: 원인 가설 수립 — 검증 실험 대기
+상태: **원인 확정** (장비 소스코드 분석으로 H-A 검증 완료) + 우리측 완화 배포 완료
 발견: 2026-06-12 1시간 스트림 테스트 (`logs/` 1032 세트)
 영향: 직결 모드에서 ~75초 주기 스트림 단절 반복 (viewer는 매회 무개입 자동 복구 — 클라이언트 영향은 가용성 저하뿐)
 
@@ -58,6 +58,31 @@ GET_PARAMETER/OPTIONS가 ~30초 주기로 나가는지 + SETUP 응답의 `Sessio
 - **H-A 확정 시**: ① (우리측 완화) 종료 경로에서 TEARDOWN 보장 강화 — SIGTERM/SIGINT 핸들러로 graceful shutdown 추가(제품 위생상 무조건 가치 있음), stall-close 시 TEARDOWN 유실 여부 보완. 단 무선 단절 등 유령이 불가피한 경우는 남으므로 ② (장비측 근본) ModalAI 포럼/이슈 보고 대상. ③ (아키텍처) M4의 MediaMTX 경유가 기본이 되면 장비 레그는 상시 1연결로 유령 자체가 안 생김 — **이 이슈는 M4 아키텍처로 구조적으로 흡수됨**. 직결은 진단용이므로 문서화로 충분할 수 있음.
 - **H-B 확정 시**: FFmpeg keep-alive 옵션/버전 검토, 또는 동일하게 M4로 흡수.
 - **신규 연결 거부 증상**: E4 채증 후 별도 판단 (장비 재부팅/프로비저닝 정리로 해소되는지 포함).
+
+## 원인 확정 (2026-06-12 오후, voxl-streamer 소스 분석)
+
+voxl-streamer `main.c`의 `timeout()` 콜백(2초 주기)이 범인이다:
+
+```c
+guint removed = gst_rtsp_session_pool_cleanup(pool);
+if (removed > 0){
+    ctx->num_rtsp_clients--;          // ← 무조건 감소: 유령 청소인데 산 클라이언트 수를 깎음
+    if(ctx->num_rtsp_clients == 0){   // ← 0이 되면 프레임 카운터·need_data 리셋
+        ... // = 소스 파이프 닫힘 → 살아있는 클라이언트의 스트림 중단
+```
+
+- 정상 disconnect 핸들러(`rtsp_client_disconnected`)도 감소시키므로, 유령 1개가 청소되면 **더블 디크리먼트** → 산 클라이언트 1명이 있어도 카운트 0 → 송출 중단. 우리가 관찰한 자기영속 루프와 정확히 일치.
+- 역사: forum 스레드 #1647의 teardown-request 미처리 문제를 고치려고 **v0.4.2에 커뮤니티 PR로 들어온 코드가 이 버그를 도입**, 최신 sdk-1.7.0(2026-03)까지 미수정.
+- 동일 증상의 기존 보고는 포럼에 없음 → 우리가 최초 보고자가 될 수 있고, 코드 수준 분석 + 재현 절차를 보유.
+- 상세: `.omc/research/modalai-ghost-session.md` (출처 URL·코드 인용 전체)
+
+## 우리측 완화 (배포 완료, fd0afca)
+
+1. close 경로 TEARDOWN 보장 — 2단계 interrupt (읽기 즉시 중단 → close_input 1초 유예로 TEARDOWN 송신)
+2. SIGTERM/SIGINT graceful shutdown (self-pipe + QSocketNotifier)
+3. 회귀 방지: 통합테스트 "close()는 TEARDOWN을 송신한다" 추가 — MediaMTX 로그의 `destroyed: torn down by`로 검증 (장비 상태와 무관한 재현 환경)
+
+한계: 무선 단절·전원차단처럼 TEARDOWN 기회 자체가 없는 경우의 유령은 막을 수 없음 → 장비측 수정(보고) 또는 M4 흡수가 필요.
 
 ## 참고
 
