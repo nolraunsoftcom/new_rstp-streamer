@@ -1,5 +1,9 @@
 #include "ChannelSourceFactory.h"
 
+#include <cstdio>
+
+#include "src/infra/persist/PngSnapshotWriter.h"
+
 namespace nv::infra {
 
 std::unique_ptr<nv::app::IStreamSource> ChannelSourceFactory::createSource(
@@ -11,7 +15,8 @@ std::unique_ptr<nv::app::IStreamSource> ChannelSourceFactory::createSource(
         if (!s) s = std::make_unique<LatestSurfaceSlot>();
         slot = s.get();
     }
-    return std::make_unique<Bundle>(*slot, m_executor);
+    // Bundle 생성자가 m_bundles에 자기를 등록한다(소멸 시 자동 해제).
+    return std::make_unique<Bundle>(*this, channelId, *slot, m_executor);
 }
 
 void ChannelSourceFactory::destroySource(const std::string& channelId) {
@@ -49,6 +54,62 @@ void ChannelSourceFactory::releaseConsumed(const std::string& channelId, void* h
         s = it->second.get();
     }
     s->releaseConsumed(handle);
+}
+
+bool ChannelSourceFactory::startRecording(const std::string& channelId,
+                                          const std::string& outputPath) {
+    Bundle* b = nullptr;
+    {
+        std::lock_guard lk(m_mu);
+        auto it = m_bundles.find(channelId);
+        if (it != m_bundles.end()) b = it->second;
+    }
+    if (b == nullptr) return false;   // 살아있는 소스 없음(미생성/이미 제거)
+    return b->ffmpeg().startRecording(outputPath);
+}
+
+void ChannelSourceFactory::stopRecording(const std::string& channelId) {
+    Bundle* b = nullptr;
+    {
+        std::lock_guard lk(m_mu);
+        auto it = m_bundles.find(channelId);
+        if (it != m_bundles.end()) b = it->second;
+    }
+    if (b != nullptr) b->ffmpeg().stopRecording();
+}
+
+bool ChannelSourceFactory::isRecording(const std::string& channelId) const {
+    Bundle* b = nullptr;
+    {
+        std::lock_guard lk(m_mu);
+        auto it = m_bundles.find(channelId);
+        if (it != m_bundles.end()) b = it->second;
+    }
+    return b != nullptr && b->ffmpeg().isRecording();
+}
+
+bool ChannelSourceFactory::snapshot(const std::string& channelId,
+                                    const std::string& outputPath) {
+    LatestSurfaceSlot* s = nullptr;
+    {
+        std::lock_guard lk(m_mu);
+        auto it = m_slots.find(channelId);
+        if (it != m_slots.end()) s = it->second.get();
+    }
+    if (s == nullptr) {
+        std::fprintf(stderr, "[ChannelSourceFactory] snapshot: 슬롯 없음 (%s)\n",
+                     channelId.c_str());
+        return false;
+    }
+    // 슬롯의 최신 RGBA(오버레이 없는 디코딩 원본). lastSeq=0이라 항상 현재 프레임을 받는다.
+    // 순수 GPU 경로로 RGBA가 비면 width/height가 0이거나 rgba가 비어 false.
+    LatestSurfaceSlot::Frame frame;
+    if (!s->latest(frame, 0) || frame.rgba.empty() || frame.width <= 0 || frame.height <= 0) {
+        std::fprintf(stderr, "[ChannelSourceFactory] snapshot: 프레임 RGBA 없음 (%s)\n",
+                     channelId.c_str());
+        return false;
+    }
+    return PngSnapshotWriter::write(outputPath, frame.width, frame.height, frame.rgba.data());
 }
 
 LatestSurfaceSlot* ChannelSourceFactory::slot(const std::string& channelId) {

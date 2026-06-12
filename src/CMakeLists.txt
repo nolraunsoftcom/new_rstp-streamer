@@ -36,6 +36,7 @@ add_library(nv_infra STATIC
   infra/ffmpeg/HwContext.cpp
   infra/ffmpeg/ChannelSourceFactory.cpp
   infra/persist/JsonChannelRepository.cpp
+  infra/persist/PngSnapshotWriter.cpp
   infra/system/ResourceMonitor.cpp
 )
 target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
@@ -46,10 +47,12 @@ if(WIN32)
   # D3D11VA HW 디코딩은 HwContext.cpp의 #ifdef _WIN32 분기에서 활성.
   # d3d11 / dxgi는 FFmpeg avcodec이 내부적으로 요구; 명시 링크로 확실히 해결.
   target_include_directories(nv_infra PUBLIC ${FFMPEG_INCLUDE_DIRS})
-  target_link_libraries(nv_infra PUBLIC nv_app Qt6::Core ${FFMPEG_LIBRARIES} d3d11 dxgi)
+  # Qt6::Gui — PngSnapshotWriter의 QImage(PNG 저장). Core는 JsonChannelRepository/RecordingPaths.
+  target_link_libraries(nv_infra PUBLIC nv_app Qt6::Core Qt6::Gui ${FFMPEG_LIBRARIES} d3d11 dxgi)
 else()
   # macOS/Linux: pkg-config IMPORTED_TARGET 사용.
-  target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG Qt6::Core)
+  # Qt6::Gui — PngSnapshotWriter의 QImage(PNG 저장).
+  target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG Qt6::Core Qt6::Gui)
 endif()
 
 # macOS: VideoToolbox HW 디코딩 — CVPixelBuffer 수명 관리에 CoreVideo 필요.
