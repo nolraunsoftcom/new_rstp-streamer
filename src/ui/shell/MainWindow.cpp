@@ -261,11 +261,17 @@ int MainWindow::manualColumns() const {
 }
 
 void MainWindow::onChannelList(QVector<QString> ids, QVector<QString> names,
-                               QVector<QString> urls, QVector<int> gridIndexes) {
+                               QVector<QString> urls, QVector<int> gridIndexes,
+                               QVector<bool> autoConnects) {
     m_channels.clear();
     for (int i = 0; i < ids.size(); ++i) {
-        m_channels.push_back({ids[i].toStdString(), names[i].toStdString(),
-                              urls[i].toStdString(), gridIndexes[i]});
+        nv::domain::ChannelConfig cfg;
+        cfg.id          = ids[i].toStdString();
+        cfg.name        = names[i].toStdString();
+        cfg.url         = urls[i].toStdString();
+        cfg.gridIndex   = gridIndexes[i];
+        cfg.autoConnect = i < autoConnects.size() ? autoConnects[i] : false;
+        m_channels.push_back(std::move(cfg));
     }
     m_channelPanel->updateChannels(m_channels);
     rebuildGrid();
@@ -287,7 +293,7 @@ void MainWindow::onSnapshot(QString channelId, QString state, int attempts, QLis
 void MainWindow::openAddDialog() {
     ChannelDialog dlg(this);
     if (dlg.exec() == QDialog::Accepted && !dlg.url().isEmpty())
-        m_commands.addChannel(dlg.name().toStdString(), dlg.url().toStdString());
+        m_commands.addChannel(dlg.name().toStdString(), dlg.url().toStdString(), dlg.autoConnect());
 }
 
 void MainWindow::openEditDialog(const std::string& id) {
@@ -297,9 +303,9 @@ void MainWindow::openEditDialog(const std::string& id) {
     }
     for (const auto& c : m_channels) {
         if (c.id != id) continue;
-        ChannelDialog dlg(this, QString::fromStdString(c.name), QString::fromStdString(c.url));
+        ChannelDialog dlg(this, QString::fromStdString(c.name), QString::fromStdString(c.url), c.autoConnect);
         if (dlg.exec() == QDialog::Accepted)
-            m_commands.updateChannel(id, dlg.name().toStdString(), dlg.url().toStdString());
+            m_commands.updateChannel(id, dlg.name().toStdString(), dlg.url().toStdString(), dlg.autoConnect());
         return;
     }
 }

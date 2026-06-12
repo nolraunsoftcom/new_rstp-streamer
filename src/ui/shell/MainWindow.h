@@ -24,8 +24,8 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     struct Commands {
-        std::function<void(std::string name, std::string url)> addChannel;
-        std::function<void(std::string id, std::string name, std::string url)> updateChannel;
+        std::function<void(std::string name, std::string url, bool autoConnect)> addChannel;
+        std::function<void(std::string id, std::string name, std::string url, bool autoConnect)> updateChannel;
         std::function<void(std::string id)> removeChannel;
         std::function<void(std::string id)> retryChannel;
         std::function<void(std::string id)> framePainted;
@@ -42,7 +42,7 @@ public:
 
 public slots:
     void onChannelList(QVector<QString> ids, QVector<QString> names, QVector<QString> urls,
-                       QVector<int> gridIndexes);
+                       QVector<int> gridIndexes, QVector<bool> autoConnects);
     void onSnapshot(QString channelId, QString state, int attempts, QList<int> stages,
                     double pps, qlonglong msSinceLastPacket, QString reason);
 

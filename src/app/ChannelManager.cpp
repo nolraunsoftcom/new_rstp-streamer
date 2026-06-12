@@ -55,7 +55,9 @@ void ChannelManager::restore(bool autoConnect) {
         }
         makeEntry(cfg);
     }
-    if (autoConnect) connectAll();
+    // 전역 --connect 또는 채널별 자동 연결 플래그
+    for (auto& [_, e] : m_entries)
+        if (autoConnect || e.cfg.autoConnect) e.ctrl->connect();
     notifyList();
 }
 
@@ -79,7 +81,7 @@ int ChannelManager::nextIdNumber() const {
     return maxN + 1;
 }
 
-std::string ChannelManager::addChannel(std::string name, std::string url) {
+std::string ChannelManager::addChannel(std::string name, std::string url, bool autoConnect) {
     if (!isValidRtspUrl(url)) return {};   // S2: 비 RTSP 스킴 거부
     if (channelCount() >= m_maxChannels) return {};
     ChannelConfig cfg;
@@ -87,6 +89,7 @@ std::string ChannelManager::addChannel(std::string name, std::string url) {
     cfg.name = std::move(name);
     cfg.url = std::move(url);
     cfg.gridIndex = nextGridIndex();
+    cfg.autoConnect = autoConnect;
     // map 삽입 후 std::prev(end()) 는 키 정렬 순서라 id와 다를 수 있으므로
     // id를 미리 지역 변수로 보관한다.
     const std::string id = cfg.id;
@@ -106,7 +109,8 @@ void ChannelManager::removeChannel(const std::string& id) {
     notifyList();
 }
 
-void ChannelManager::updateChannel(const std::string& id, std::string name, std::string url) {
+void ChannelManager::updateChannel(const std::string& id, std::string name, std::string url,
+                                   bool autoConnect) {
     if (!isValidRtspUrl(url)) return;       // S2: 비 RTSP 스킴 거부
     auto it = m_entries.find(id);
     if (it == m_entries.end()) return;
@@ -114,6 +118,7 @@ void ChannelManager::updateChannel(const std::string& id, std::string name, std:
     e.cfg.name = std::move(name);
     const bool urlChanged = (e.cfg.url != url);
     e.cfg.url = url;
+    e.cfg.autoConnect = autoConnect;
     if (urlChanged) {
         e.ctrl->disconnect();               // Failed 함정 방지 — main.cpp 연결 버튼과 동일 시퀀스
         e.ctrl->setUrl(std::move(url));

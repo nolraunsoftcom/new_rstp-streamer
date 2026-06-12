@@ -22,6 +22,7 @@ static std::vector<ChannelConfig> parseArray(const QJsonArray& arr) {
         c.name = o.value("name").toString().toStdString();
         c.url = o.value("url").toString().toStdString();
         c.gridIndex = o.value("gridIndex").toInt(-1);
+        c.autoConnect = o.value("autoConnect").toBool(false);
         if (!c.id.empty()) out.push_back(std::move(c));
     }
     return out;
@@ -60,6 +61,7 @@ bool JsonChannelRepository::save(const std::vector<ChannelConfig>& channels) {
         o["name"] = QString::fromStdString(c.name);
         o["url"] = QString::fromStdString(c.url);
         o["gridIndex"] = c.gridIndex;
+        o["autoConnect"] = c.autoConnect;
         arr.append(o);
     }
     QJsonObject envelope;

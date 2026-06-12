@@ -27,9 +27,9 @@ public:
                    int maxChannels = kDefaultMaxChannels);
 
     void restore(bool autoConnect);                        // 저장본 로드 (시작 시 1회)
-    std::string addChannel(std::string name, std::string url);   // 실패(한도) 시 "" 반환
+    std::string addChannel(std::string name, std::string url, bool autoConnect = false);   // 실패(한도) 시 "" 반환
     void removeChannel(const std::string& id);
-    void updateChannel(const std::string& id, std::string name, std::string url);
+    void updateChannel(const std::string& id, std::string name, std::string url, bool autoConnect = false);
     void swapGrid(const std::string& idA, const std::string& idB);
 
     void connectAll();

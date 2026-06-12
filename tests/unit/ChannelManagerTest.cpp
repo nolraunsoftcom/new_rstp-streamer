@@ -247,3 +247,73 @@ TEST_CASE("addChannel: 대문자 스킴 RTSP://, RTSPS://도 허용") {
     CHECK_FALSE(f.mgr.addChannel("c", "Rtsp://cam3").empty());
     CHECK(f.mgr.channelCount() == 3);
 }
+
+// ── autoConnect 회귀 테스트 ────────────────────────────────────────────────
+
+TEST_CASE("addChannel(autoConnect=true)는 cfg에 저장되고 저장소에 영속된다") {
+    Fixture f;
+    const auto id = f.mgr.addChannel("a", "rtsp://a", true);
+    REQUIRE_FALSE(id.empty());
+    CHECK(f.mgr.config(id).autoConnect == true);
+    REQUIRE(f.repo.stored.size() == 1);
+    CHECK(f.repo.stored[0].autoConnect == true);
+}
+
+TEST_CASE("addChannel(autoConnect=false, 기본값)는 cfg에 false로 저장된다") {
+    Fixture f;
+    const auto id = f.mgr.addChannel("b", "rtsp://b");
+    REQUIRE_FALSE(id.empty());
+    CHECK(f.mgr.config(id).autoConnect == false);
+    REQUIRE(f.repo.stored.size() == 1);
+    CHECK(f.repo.stored[0].autoConnect == false);
+}
+
+TEST_CASE("restore: 전역 autoConnect=false여도 cfg.autoConnect=true 채널은 연결된다") {
+    FakeChannelRepository repo;
+    repo.stored = {
+        {"ch1", "auto",   "rtsp://a", 0, true},   // autoConnect=true
+        {"ch2", "manual", "rtsp://b", 1, false},   // autoConnect=false
+    };
+    FakeRuntimeFactory factory;
+    FakeClock clock;
+    FakeLogger logger;
+    ChannelManager mgr{repo, factory, clock, logger, ReconnectPolicy{}, StallPolicy{}};
+
+    mgr.restore(false);   // 전역 autoConnect=false
+    CHECK(mgr.channelCount() == 2);
+    CHECK(factory.registry.at("ch1")->openCount == 1);   // 채널별 true → 연결됨
+    CHECK(factory.registry.at("ch2")->openCount == 0);   // 채널별 false → 연결 안됨
+}
+
+TEST_CASE("restore: 전역 autoConnect=true면 채널 플래그 무관하게 모두 연결된다") {
+    FakeChannelRepository repo;
+    repo.stored = {
+        {"ch1", "auto",   "rtsp://a", 0, true},
+        {"ch2", "manual", "rtsp://b", 1, false},
+    };
+    FakeRuntimeFactory factory;
+    FakeClock clock;
+    FakeLogger logger;
+    ChannelManager mgr{repo, factory, clock, logger, ReconnectPolicy{}, StallPolicy{}};
+
+    mgr.restore(true);   // 전역 autoConnect=true → 모두 연결
+    CHECK(mgr.channelCount() == 2);
+    CHECK(factory.registry.at("ch1")->openCount == 1);
+    CHECK(factory.registry.at("ch2")->openCount == 1);
+}
+
+TEST_CASE("updateChannel로 autoConnect 토글이 cfg와 저장소에 반영된다") {
+    Fixture f;
+    const auto id = f.mgr.addChannel("a", "rtsp://a", false);
+    REQUIRE_FALSE(id.empty());
+    CHECK(f.mgr.config(id).autoConnect == false);
+
+    f.mgr.updateChannel(id, "a", "rtsp://a", true);
+    CHECK(f.mgr.config(id).autoConnect == true);
+    REQUIRE_FALSE(f.repo.stored.empty());
+    CHECK(f.repo.stored[0].autoConnect == true);
+
+    f.mgr.updateChannel(id, "a", "rtsp://a", false);
+    CHECK(f.mgr.config(id).autoConnect == false);
+    CHECK(f.repo.stored[0].autoConnect == false);
+}

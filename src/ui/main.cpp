@@ -115,17 +115,17 @@ int main(int argc, char** argv) {
 
     // MainWindow commands
     nv::ui::MainWindow::Commands winCmds;
-    winCmds.addChannel = [&](std::string n, std::string u) {
-        executor.post([&, n = std::move(n), u = std::move(u)] {
-            const auto id = mgr.addChannel(n, u);
+    winCmds.addChannel = [&](std::string n, std::string u, bool ac) {
+        executor.post([&, n = std::move(n), u = std::move(u), ac] {
+            const auto id = mgr.addChannel(n, u, ac);
             if (!id.empty()) {
                 if (auto* c = mgr.controller(id)) c->connect();
             }
         });
     };
-    winCmds.updateChannel = [&](std::string id, std::string n, std::string u) {
-        executor.post([&, id, n = std::move(n), u = std::move(u)] {
-            mgr.updateChannel(id, n, u);
+    winCmds.updateChannel = [&](std::string id, std::string n, std::string u, bool ac) {
+        executor.post([&, id, n = std::move(n), u = std::move(u), ac] {
+            mgr.updateChannel(id, n, u, ac);
         });
     };
     winCmds.removeChannel = gridCb.removeRequested;
@@ -144,17 +144,20 @@ int main(int argc, char** argv) {
         const auto cfgs = mgr.configs();
         QVector<QString> ids, names, urls;
         QVector<int> gi;
+        QVector<bool> ac;
         for (const auto& c : cfgs) {
             ids.push_back(QString::fromStdString(c.id));
             names.push_back(QString::fromStdString(c.name));
             urls.push_back(QString::fromStdString(c.url));
             gi.push_back(c.gridIndex);
+            ac.push_back(c.autoConnect);
         }
         QMetaObject::invokeMethod(&win, "onChannelList", Qt::QueuedConnection,
                                   Q_ARG(QVector<QString>, ids),
                                   Q_ARG(QVector<QString>, names),
                                   Q_ARG(QVector<QString>, urls),
-                                  Q_ARG(QVector<int>, gi));
+                                  Q_ARG(QVector<int>, gi),
+                                  Q_ARG(QVector<bool>, ac));
     };
 
     // Fix 3: 옵저버 설정은 control 스레드(executor)에서만 — executor.post로 진입

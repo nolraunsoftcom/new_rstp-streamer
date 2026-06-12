@@ -155,6 +155,40 @@ TEST_CASE("version 2 파일은 로드 거부(빈 목록) + 이후 save 거부") 
     }
 }
 
+// ── autoConnect 회귀 테스트 ────────────────────────────────────────────────
+
+TEST_CASE("autoConnect 필드 라운드트립: true/false 모두 보존된다") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const std::string path = (dir.path() + "/autoconnect.json").toStdString();
+
+    nv::infra::JsonChannelRepository repo(path);
+    std::vector<ChannelConfig> in = {
+        {"ch1", "자동",   "rtsp://auto/stream",   0, /*autoConnect=*/true},
+        {"ch2", "수동",   "rtsp://manual/stream", 1, /*autoConnect=*/false},
+    };
+    REQUIRE(repo.save(in));
+
+    nv::infra::JsonChannelRepository repo2(path);
+    auto out = repo2.load();
+    REQUIRE(out.size() == 2);
+    CHECK(out[0].autoConnect == true);
+    CHECK(out[1].autoConnect == false);
+}
+
+TEST_CASE("autoConnect 필드 누락 항목은 false로 로드된다(기본값 하위호환)") {
+    QTemporaryDir dir;
+    const QString p = dir.path() + "/no_autoconnect.json";
+    {
+        QFile f(p); (void)f.open(QIODevice::WriteOnly);
+        f.write(R"([{"id":"ch1","name":"cam","url":"rtsp://x","gridIndex":0}])");
+    }
+    nv::infra::JsonChannelRepository repo(p.toStdString());
+    auto out = repo.load();
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].autoConnect == false);
+}
+
 TEST_CASE("version 키 누락 객체도 channels 있으면 로드") {
     QTemporaryDir dir;
     const QString p = dir.path() + "/noversion.json";
