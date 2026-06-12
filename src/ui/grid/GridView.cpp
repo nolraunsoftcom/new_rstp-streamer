@@ -121,8 +121,8 @@ struct GridView::Tile : public QWidget {
 GridView::GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb, QWidget* parent)
     : QScrollArea(parent), m_slots(slotRegistry), m_cb(std::move(cb))
 {
-    // 레거시 스크롤 영역 설정: 수직 스크롤만, 수평 없음, 프레임 없음, 검정 배경
-    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    // 레거시 스크롤 영역 설정: 수직 스크롤 항상 표시(viewport 폭 진동 방지), 수평 없음, 프레임 없음, 검정 배경
+    setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setFrameShape(QFrame::NoFrame);
     setStyleSheet(QStringLiteral("QScrollArea { background-color: black; border: none; }"));
@@ -143,6 +143,10 @@ GridView::GridView(nv::infra::ChannelSourceFactory* slotRegistry, Callbacks cb, 
 // rebuild()와 resizeEvent() 양쪽에서 호출. 계산된 레이아웃이 직전과 동일하면 스킵.
 void GridView::relayout()
 {
+    if (m_inRelayout) return;
+    m_inRelayout = true;
+    struct Guard { bool& flag; ~Guard() { flag = false; } } guard{m_inRelayout};
+
     const auto& configs       = m_lastConfigs;
     const int   manualColumns = m_lastManualColumns;
 
@@ -291,7 +295,13 @@ void GridView::relayout()
 void GridView::resizeEvent(QResizeEvent* ev)
 {
     QScrollArea::resizeEvent(ev);
-    relayout();
+    if (!m_relayoutQueued) {
+        m_relayoutQueued = true;
+        QTimer::singleShot(0, this, [this] {
+            m_relayoutQueued = false;
+            relayout();
+        });
+    }
 }
 
 void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,

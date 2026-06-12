@@ -1,5 +1,6 @@
 #pragma once
 #include <QScrollArea>
+#include <QTimer>
 #include <functional>
 #include <map>
 #include "src/domain/channel/ChannelConfig.h"
@@ -53,6 +54,10 @@ private:
     int m_cachedRows     = 0;
     int m_cachedCellW    = 0;
     int m_cachedCellH    = 0;
+
+    // Oscillation fix: re-entrancy guard + resize coalescing
+    bool m_inRelayout      = false;
+    bool m_relayoutQueued  = false;
 };
 
 } // namespace nv::ui
