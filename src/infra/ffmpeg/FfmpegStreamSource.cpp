@@ -201,7 +201,21 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
                 if (av_hwframe_transfer_data(swf, frm, 0) == 0) {
                     src = swf;
                 } else {
-                    // 전송 실패 — 이 프레임은 표시 불가, drop
+                    // HW→CPU 전송 실패 — 이 프레임은 표시 불가, drop.
+                    //
+                    // ── 슬롯 핸들 불변량 (#10/#22) ─────────────────────────────────────
+                    // publishGpu/publishCpu를 호출하지 않으므로 슬롯은 직전 성공 프레임의
+                    // GPU 핸들(≤1개)을 그대로 유지한다. 이것은 의도된 동작이며 무해하다:
+                    //   • LatestSurfaceSlot은 항상 "최신 유효 프레임 ≤1핸들"을 보유한다.
+                    //     (publishGpu가 releaseGpuLocked를 먼저 호출해 이전 핸들을 해제)
+                    //   • 소비자(렌더러)는 seq 가드로 이미 소비한 프레임을 재소비하지 않는다.
+                    //     따라서 직전 핸들이 슬롯에 남아 있어도 이중 소비·이중 해제는
+                    //     발생하지 않는다.
+                    //   • gpuHandle은 이 분기에서 extractGpuHandle로 얻었지만 publishGpu에
+                    //     전달되지 않으므로 슬롯이 retain하지 않는다. 핸들은 frm과 함께
+                    //     av_frame_unref(frm)로 CVPixelBuffer 수명이 코덱 내부에서 관리된다.
+                    //     (이 함수는 핸들을 별도 retain하지 않으므로 누수 없음.)
+                    // ────────────────────────────────────────────────────────────────────
                     av_frame_unref(frm);
                     continue;
                 }

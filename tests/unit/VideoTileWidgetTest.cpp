@@ -140,3 +140,29 @@ TEST_CASE("RhiVideoRenderer: CpuRgba 서피스는 releaseConsumed 미호출") {
 
     REQUIRE(reg.releaseConsumedCallCount == 0);
 }
+
+// ── RHI 프로브 캐시 동작 (#20) ─────────────────────────────────────────────────
+// 오프스크린(QPA=offscreen) 환경에서는 QRhi 초기화가 실패해 첫 타일 생성 시
+// renderFailed → fallbackToSw() 가 발생하고 프로세스 전역 캐시가 "RHI 불가"로
+// 기록된다. 이 테스트는 그 캐시 결과를 이용해 이후 타일이 정상 동작하는지 확인한다.
+//
+// 구체적으로: 캐시가 이미 기록된 상태(앞선 테스트에서 RHI 시도→실패)에서도
+// GpuTexture 서피스를 pollFrame()으로 받으면 releaseConsumed가 1회 호출돼야 한다.
+// (SW 폴백 경로이므로 동반 RGBA를 그리고 GPU 핸들은 즉시 반납.)
+TEST_CASE("VideoTileWidget: RHI 프로브 캐시 후 GpuTexture 핸들 정상 반납 (#20)") {
+    (void)getApp();
+    // 앞선 테스트에서 오프스크린 환경이 이미 프로브를 실행했을 수 있다.
+    // 어떤 상태(캐시 hit/miss)이든 정상 동작해야 한다.
+    FakeRegistry reg;
+    void* fakeHandle = reinterpret_cast<void*>(0xC4C4C4C4);
+    reg.setGpuSurface(fakeHandle, /*seq=*/99);
+    reg.m_surface.rgba.assign(16 * 16 * 4, 42);  // 동반 RGBA 채움(SW 폴백 표시용)
+
+    nv::ui::VideoTileWidget tile(reg, "ch-probe");
+    tile.pollFrame();
+
+    // SW 경로(오프스크린이어서 RHI 캐시 miss 또는 캐시 hit으로 SW 선택)에서
+    // GpuTexture 핸들은 즉시 반납해야 한다.
+    REQUIRE(reg.releaseConsumedCallCount == 1);
+    REQUIRE(reg.lastReleasedHandle == fakeHandle);
+}
