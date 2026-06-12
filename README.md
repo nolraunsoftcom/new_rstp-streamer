@@ -20,4 +20,5 @@ ctest --test-dir build --output-on-failure
 - [x] M1-파이프라인: FFmpeg 어댑터(RTSP/TCP) + 1채널 UI + 통합 하니스
 - [ ] M1 수용 1차: 실장비 2h 스트레스 실구동 + 분석 (`ops/stress-m1.md`, watchdog 미설치 전제)
 - [ ] M1 수용 2차: 24h 소크
-- [ ] M2: 멀티채널 그리드 + HW 디코딩/GPU 렌더 + 성능 게이트
+- [x] M2a: 멀티채널 그리드 (레거시 UI 패리티, SW 디코딩, 소프트한도 32)
+- [ ] M2b: HW 디코딩 + GPU 렌더 + Windows + 성능 게이트(20ch 보장)
