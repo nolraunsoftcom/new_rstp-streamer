@@ -13,12 +13,13 @@ bool PngSnapshotWriter::write(const std::string& path, int w, int h, const uint8
         return false;
     }
 
-    // tight RGBA(stride=w*4)를 QImage로 감싼다 — 외부 버퍼를 참조만 하므로 copy()로
-    // 깊은 복사본을 만들어 호출자 버퍼 수명과 분리한 뒤 PNG로 저장한다.
+    // tight RGBA(stride=w*4)를 QImage로 감싼다.
+    // 호출자(SnapTask::run)가 rgba 벡터를 소유하며 save() 완료까지 수명을 보장하므로
+    // H3: copy()를 제거해 이중 복사를 방지한다(latest()→frame.rgba 깊은 복사 1회로 충분).
+    // QImage::save()는 동기적으로 완료되고, view는 save() 반환 전까지 유효하다.
     const QImage view(rgbaTight, w, h, w * 4, QImage::Format_RGBA8888);
-    const QImage owned = view.copy();   // 깊은 복사 (소유 버퍼)
 
-    if (!owned.save(QString::fromStdString(path), "PNG")) {
+    if (!view.save(QString::fromStdString(path), "PNG")) {
         std::fprintf(stderr, "[PngSnapshotWriter] PNG 저장 실패: %s\n", path.c_str());
         return false;
     }

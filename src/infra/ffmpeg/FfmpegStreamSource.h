@@ -51,8 +51,11 @@ public:
     bool startRecording(const std::string& outputPath);
     // 녹화 중지 요청. 디코드 루프가 다음 반복에서 레코더를 stop/소멸한다.
     void stopRecording();
-    // 현재 실제로 녹화 중인지(디코드 스레드가 레코더를 열어둔 상태인지) 반환.
-    bool isRecording() const { return m_recording.load(); }
+    // 현재 녹화 중이거나 시작 요청이 살아있는지 반환.
+    // H1: m_recordRequested가 true이면(시작 요청 후 첫 키프레임 전, 재연결 갭 등)
+    // 비녹화로 판정하지 않아 reconcile의 거짓양성 수렴을 차단한다.
+    // 진짜 시작 실패 시 serviceRecording이 m_recordRequested를 내리므로 reconcile은 그대로 동작.
+    bool isRecording() const { return m_recording.load() || m_recordRequested.load(); }
 
 private:
     void run(std::string url, nv::app::StreamSourceListener* listener);

@@ -4,6 +4,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <QThreadPool>
 #include "src/app/ports/IChannelRuntimeFactory.h"
 #include "src/app/ports/IExecutor.h"
 #include "src/app/ports/IFrameSurfaceRegistry.h"
@@ -94,6 +95,10 @@ private:
     // 살아있는 채널 소스(녹화 위임용). createSource에서 등록, destroySource에서 제거.
     // 소유는 호출자(ChannelController)가 unique_ptr로 보유하므로 여기는 비소유 포인터.
     std::map<std::string, Bundle*> m_bundles;
+
+    // H3: 스냅샷 워커 풀 — 최대 2스레드로 제한(연타 시 스레드·버퍼 누적 방지).
+    // 앱 종료 시 waitForDone()이 자동 호출돼 미완료 워커를 안전하게 대기한다.
+    QThreadPool m_snapshotPool;
 };
 
 } // namespace nv::infra

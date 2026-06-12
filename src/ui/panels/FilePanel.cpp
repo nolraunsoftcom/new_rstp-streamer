@@ -100,6 +100,20 @@ void FilePanel::refresh()
         QStringList() << QStringLiteral("*.mkv") << QStringLiteral("*.png"),
         QDir::Files, QDir::Time);
 
+    // H4: 썸네일 캐시 정리 — 현존 파일 키만 남긴다.
+    // 파일 갱신·삭제 시 구 항목이 남아 캐시가 무한 성장하는 것을 방지한다.
+    {
+        QHash<QString, QIcon> live;
+        for (const QFileInfo& fi : files) {
+            if (fi.suffix().toLower() != QStringLiteral("png")) continue;
+            const QString key = fi.absoluteFilePath() + QLatin1Char('|')
+                                + QString::number(fi.lastModified().toSecsSinceEpoch());
+            auto it = m_thumbCache.constFind(key);
+            if (it != m_thumbCache.constEnd()) live.insert(key, it.value());
+        }
+        m_thumbCache.swap(live);
+    }
+
     for (const QFileInfo& fi : files) {
         const bool isPng = fi.suffix().toLower() == QStringLiteral("png");
 

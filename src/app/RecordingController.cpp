@@ -186,8 +186,13 @@ void RecordingController::tick() {
         if (elapsed >= kReconcileGrace && !m_sink.isRecording(id)) {
             m_logger.log(LogLevel::Warn, id, "RecordingController",
                          "녹화 중이라 표시됐으나 sink는 비녹화 — Idle로 수렴(REC 해제)");
+            // H2: stopRecording을 명시적으로 호출해 FfmpegStreamSource의
+            // m_recordRequested 래치를 확실히 내린다. wedge-detach 등 예외 경로에서
+            // 좀비 녹화(레코더는 닫혔으나 래치가 살아있는 상태)를 차단한다.
+            // armed는 유지 — H1 적용 후 여기 도달은 진짜 시작 실패이므로
+            // 다음 onStreaming 시 재시도가 맞다(로그로 가시화됨).
+            m_sink.stopRecording(id);
             ch.state = nv::domain::RecordingState::Idle;
-            // armed는 유지: 진짜 복구(onStreaming) 시 다음 세그먼트를 재시도한다.
             notify(id, nv::domain::RecordingState::Idle);
             continue;
         }

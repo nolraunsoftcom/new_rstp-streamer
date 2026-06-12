@@ -1,9 +1,9 @@
 #include "ChannelSourceFactory.h"
 
 #include <cstdio>
-#include <thread>
 #include <utility>
 #include <vector>
+#include <QRunnable>
 
 #include "src/infra/persist/PngSnapshotWriter.h"
 
@@ -116,13 +116,31 @@ bool ChannelSourceFactory::snapshot(const std::string& channelId,
 
     // D4 비블로킹: PNG 압축(QImage::copy + 인코딩 + 디스크 쓰기)은 무겁다 — control 스레드에서
     // 직접 하면 전 채널 tick이 정지한다. RGBA 복사는 이미 latest()에서 끝났으므로, 인코딩/저장은
-    // 별도 워커 스레드로 떼어낸다(detach). frame.rgba를 워커로 move해 호출자 버퍼와 분리한다.
+    // 별도 워커 스레드로 떼어낸다. frame.rgba를 워커로 move해 호출자 버퍼와 분리한다.
     // 반환값은 "디스패치 성공"이라 항상 true — 실제 저장 실패는 워커가 stderr 로그로 남긴다.
     // (FilePanel의 QFileSystemWatcher가 저장 완료를 잡아 목록을 갱신한다.)
-    std::thread([path = outputPath, w = frame.width, h = frame.height,
-                 rgba = std::move(frame.rgba)]() mutable {
-        PngSnapshotWriter::write(path, w, h, rgba.data());
-    }).detach();
+    //
+    // H3: detach된 std::thread 대신 maxThreadCount=2 풀(m_snapshotPool)로 디스패치.
+    // 연타(빠른 스냅샷 요청)로 스레드·8MB 버퍼가 무제한 누적되는 것을 방지한다.
+    // 앱 종료 시 소멸자가 waitForDone()을 호출해 미완료 워커를 안전하게 정리한다.
+    if (m_snapshotPool.maxThreadCount() != 2)
+        m_snapshotPool.setMaxThreadCount(2);
+
+    struct SnapTask : public QRunnable {
+        std::string path;
+        int w, h;
+        std::vector<uint8_t> rgba;
+        void run() override {
+            PngSnapshotWriter::write(path, w, h, rgba.data());
+        }
+    };
+    auto* task = new SnapTask;
+    task->path = outputPath;
+    task->w    = frame.width;
+    task->h    = frame.height;
+    task->rgba = std::move(frame.rgba);
+    task->setAutoDelete(true);
+    m_snapshotPool.start(task);
     return true;
 }
 
