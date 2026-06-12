@@ -20,6 +20,7 @@ find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets Core)
 add_library(nv_infra STATIC
   infra/system/ControlExecutor.cpp
   infra/ffmpeg/FfmpegStreamSource.cpp
+  infra/ffmpeg/ChannelSourceFactory.cpp
   infra/persist/JsonChannelRepository.cpp
 )
 target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
