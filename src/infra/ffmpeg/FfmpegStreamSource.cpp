@@ -1,6 +1,7 @@
 #include "FfmpegStreamSource.h"
 #include "HwContext.h"
 
+#include <cstdio>
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -121,6 +122,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
     // 실패하면 hw.active()==false 이고 dec는 그대로 SW 디코더로 열린다 (완전 폴백).
     HwContext hw;
     const bool hwReady = hw.init(dec, codec);
+    std::fprintf(stderr, "[FfmpegStreamSource] decode path = %s\n", hwReady ? "HW (videotoolbox)" : "SW");
     const AVPixelFormat hwPix = hw.hwPixFmt();
 
     if (avcodec_open2(dec, codec, nullptr) < 0) {
