@@ -55,6 +55,7 @@ struct GridView::Tile : public QWidget {
     QLabel*          stageDots   = nullptr;
     QPushButton*     snapBtn     = nullptr;
     QPushButton*     recBtn      = nullptr;
+    QLabel*          recBadge    = nullptr;   // M3-5: "REC" 빨강 뱃지
     VideoTileWidget* video       = nullptr;
     std::string      channelId;
     QString          name;
@@ -88,21 +89,28 @@ struct GridView::Tile : public QWidget {
 
         snapBtn = new QPushButton(QStringLiteral("📷"), infoBar);
         snapBtn->setFixedSize(24, 20);
-        snapBtn->setEnabled(false);
-        snapBtn->setToolTip(QStringLiteral("M3에서 제공"));
+        snapBtn->setEnabled(true);
+        snapBtn->setToolTip(QStringLiteral("스냅샷 저장"));
         snapBtn->setStyleSheet(kToolButton);
 
         recBtn = new QPushButton(QStringLiteral("●"), infoBar);
         recBtn->setFixedSize(24, 20);
-        recBtn->setEnabled(false);
-        recBtn->setToolTip(QStringLiteral("M3에서 제공"));
+        recBtn->setEnabled(true);
+        recBtn->setToolTip(QStringLiteral("녹화 시작/중지"));
         recBtn->setStyleSheet(kToolButton);
+
+        recBadge = new QLabel(QStringLiteral("REC"), infoBar);
+        recBadge->setStyleSheet(QStringLiteral(
+            "color:#fff; background:#d13438; font-size:9px; font-weight:bold; "
+            "padding: 1px 3px; border-radius:2px;"));
+        recBadge->hide();
 
         auto* barRow = new QHBoxLayout(infoBar);
         barRow->setContentsMargins(6, 4, 6, 4);
         barRow->setSpacing(0);
         barRow->addWidget(nameLabel);
         barRow->addStretch();
+        barRow->addWidget(recBadge);
         barRow->addWidget(stageDots);
         barRow->addWidget(packetLabel);
         barRow->addWidget(snapBtn);
@@ -336,6 +344,17 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
             connect(tile->video, &VideoTileWidget::framePainted, this,
                     [this, id = cfg.id] { m_cb.framePainted(id); });
 
+            // M3-5: 📷 스냅샷 버튼 — control 스레드로 위임
+            if (m_cb.snapshotRequested) {
+                connect(tile->snapBtn, &QPushButton::clicked, this,
+                        [this, id = cfg.id] { m_cb.snapshotRequested(id); });
+            }
+            // M3-5: ● 녹화 토글 버튼 — control 스레드로 위임
+            if (m_cb.recordToggleRequested) {
+                connect(tile->recBtn, &QPushButton::clicked, this,
+                        [this, id = cfg.id] { m_cb.recordToggleRequested(id); });
+            }
+
             connect(tile, &QWidget::customContextMenuRequested, this,
                     [this, tile](const QPoint& p) {
                 QMenu menu;
@@ -433,6 +452,27 @@ void GridView::updateTileStatus(const QString& channelId, const QString& state, 
             QStringLiteral("color:%1; font-size:10px; font-weight:bold; background:transparent;")
                 .arg(QLatin1String(packetColor(msSince))));
     }
+}
+
+void GridView::updateRecordingState(const QString& channelId, bool recording)
+{
+    auto it = m_tiles.find(channelId.toStdString());
+    if (it == m_tiles.end()) return;
+    Tile* t = it->second;
+
+    // ● 버튼: 녹화 중이면 빨강, 아니면 기본
+    static const QString kRecActive = QStringLiteral(
+        "QPushButton { color: #d13438; background: transparent; border: none; "
+        "padding: 0; margin: 0 2px; font-size: 12px; min-width: 24px; min-height: 20px; }"
+        "QPushButton:hover { color: #a80000; }");
+    t->recBtn->setStyleSheet(recording ? kRecActive : kToolButton);
+    t->recBtn->setToolTip(recording ? QStringLiteral("녹화 중지") : QStringLiteral("녹화 시작"));
+
+    // REC 뱃지 표시/숨김
+    if (recording)
+        t->recBadge->show();
+    else
+        t->recBadge->hide();
 }
 
 } // namespace nv::ui

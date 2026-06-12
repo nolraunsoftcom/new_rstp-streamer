@@ -25,3 +25,4 @@ HW/SW 강제 스위치: `NV_FORCE_SW=1` 환경변수 설정 시 SW 디코딩+렌
 - [x] M2a: 멀티채널 그리드 (레거시 UI 패리티, SW 디코딩, 소프트한도 32)
 - [x] M2b: HW 디코딩(VideoToolbox/D3D11VA) + GPU 렌더(QRhi) + Windows 구성 + 성능 게이트
 - [x] M2c: zero-copy(VideoToolbox→Metal NV12 직행) — 20ch CPU 131%→93%
+- [x] M3: 녹화/스냅샷(증거 수집) — 채널별 동시 녹화(MKV remux, 화면=녹화 일치), 디코딩 원본 PNG 스냅샷, 정보바 ●/📷 버튼 + 파일 패널, 재연결 세그먼트 분리(onReconnect). 통합 11/11(재생가능·크래시내성 D7·세그먼트), 동시 녹화 remux ~0% CPU. 수용: `docs/m3-acceptance.md`

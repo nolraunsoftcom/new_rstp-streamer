@@ -17,6 +17,7 @@ namespace nv::ui {
 class GridView;
 class ChannelListPanel;
 class LogPanel;
+class FilePanel;
 
 // 레거시 패리티 3패널 셸:
 //   좌측 ChannelListPanel + 토글 | 중앙 QTabWidget(전체/GridView, 검정 배경) | 토글 + 우측 패널(설정/파일/로그)
@@ -46,6 +47,8 @@ public slots:
                        QVector<int> gridIndexes, QVector<bool> autoConnects);
     void onSnapshot(QString channelId, QString state, int attempts, QList<int> stages,
                     double pps, qlonglong msSinceLastPacket, QString reason);
+    // M3-5: 녹화 상태 변경 → 그리드 타일 버튼 + 파일 패널 갱신
+    void onRecordingState(QString channelId, bool recording);
 
 private:
     void rebuildGrid();
@@ -58,6 +61,7 @@ private:
     GridView* m_grid = nullptr;
     ChannelListPanel* m_channelPanel = nullptr;
     LogPanel* m_logPanel = nullptr;
+    FilePanel* m_filePanel = nullptr;   // M3-5: 우측 "파일" 탭
 
     // panel references for toggle
     QWidget* m_leftPanel = nullptr;

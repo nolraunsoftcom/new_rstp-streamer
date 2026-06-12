@@ -1,4 +1,5 @@
 #include "FfmpegStreamSource.h"
+#include "FfmpegRecorder.h"
 #include "HwContext.h"
 
 #include <cstdio>
@@ -142,6 +143,89 @@ void FfmpegStreamSource::close() {
     }
 }
 
+bool FfmpegStreamSource::startRecording(const std::string& outputPath) {
+    if (outputPath.empty()) return false;
+    // D1: 이미 녹화 중이어도 거절하지 않는다. 새 경로를 pending으로 갱신하고 요청 래치를
+    // 올리면, 디코드 스레드의 serviceRecording이 pendingPath != currentPath를 감지해
+    // 현재 세그먼트를 마감(finish)하고 새 경로로 재start한다. 즉 finish/start의 직렬 수행을
+    // 디코드 스레드가 단독으로 소유 → control 스레드의 stop→start 래치 경합이 사라진다.
+    {
+        std::lock_guard lk(m_recMu);
+        m_pendingPath = outputPath;
+    }
+    m_recordRequested.store(true);   // 디코드 스레드가 다음 키프레임에서 레코더를 연다/전환한다
+    return true;
+}
+
+void FfmpegStreamSource::stopRecording() {
+    // 요청 래치를 내리면 디코드 루프가 다음 반복에서 활성 레코더를 stop/소멸한다.
+    m_recordRequested.store(false);
+    {
+        std::lock_guard lk(m_recMu);
+        m_pendingPath.clear();
+    }
+}
+
+// 디코드 스레드 전용. 녹화 요청 상태에 맞춰 레코더를 생성/start/stop하고,
+// 활성 레코더가 있으면 현재 패킷을 기록한다. inputStream은 demux 중인 입력 비디오 stream.
+void FfmpegStreamSource::serviceRecording(AVStream* inputStream, const AVPacket* pkt) {
+    const bool wantRecord = m_recordRequested.load();
+
+    // 중지 요청 또는 종료 중 — 활성 레코더 종료(세그먼트 종료).
+    if (!wantRecord) {
+        if (m_recorder) finishRecorder();
+        return;
+    }
+
+    std::string path;
+    {
+        std::lock_guard lk(m_recMu);
+        path = m_pendingPath;
+    }
+    if (path.empty()) return;
+
+    // D1 세그먼트 전환: 레코더가 열려 있는데 요청 경로가 현재 경로와 다르면, 현재 세그먼트를
+    // 마감(trailer)하고 새 경로로 다시 연다(다음 키프레임부터 새 세그먼트). control 스레드는
+    // 경로만 바꿨고 실제 finish→start는 여기(디코드 스레드)에서 직렬로 일어난다 → 래치 경합 없음.
+    if (m_recorder && path != m_currentPath) {
+        finishRecorder();
+    }
+
+    // 시작 요청인데 아직 레코더가 없으면(최초 start 또는 전환 직후) — 입력 stream으로 새로 start.
+    if (!m_recorder) {
+        if (inputStream == nullptr) return;
+        auto rec = std::make_unique<FfmpegRecorder>();
+        if (!rec->start(path, inputStream)) {
+            // 격리: 시작 실패는 이 채널 녹화만 포기. 디코드는 영향 없음.
+            // 요청 래치를 내려 매 패킷 재시도하지 않도록 한다(폭주 방지).
+            std::fprintf(stderr, "[FfmpegStreamSource] 녹화 시작 실패: %s\n", path.c_str());
+            m_recordRequested.store(false);
+            {
+                std::lock_guard lk(m_recMu);
+                m_pendingPath.clear();
+            }
+            return;
+        }
+        m_recorder = std::move(rec);
+        m_currentPath = path;
+        m_recording.store(true);
+    }
+
+    // 활성 레코더에 현재(디코더로 갈) 패킷을 기록 — FfmpegRecorder가 내부에서 av_packet_ref로
+    // 복제하므로 원본 pkt는 변경되지 않고 디코더로 그대로 보낼 수 있다(화면=녹화 일치).
+    if (m_recorder && pkt != nullptr) m_recorder->writePacket(pkt);
+}
+
+// 활성 레코더 세그먼트를 종료한다(stop + 소멸). 디코드 스레드에서만 호출.
+void FfmpegStreamSource::finishRecorder() {
+    if (m_recorder) {
+        m_recorder->stop();
+        m_recorder.reset();
+    }
+    m_currentPath.clear();
+    m_recording.store(false);
+}
+
 void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* listener) {
     AVFormatContext* fmt = avformat_alloc_context();
     fmt->interrupt_callback.callback = &FfmpegStreamSource::interruptCb;
@@ -228,6 +312,13 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
         }
         if (!m_stop) listener->onPacketReceived();
 
+        // ── 패킷 fan-out (M3 Task3) ──────────────────────────────────────────
+        // 디코더에 보내기 전에 레코더에도 같은 패킷을 전달한다(화면=녹화 일치).
+        // serviceRecording은 녹화 요청 상태에 맞춰 레코더를 start/stop하고, 활성 시
+        // pkt를 기록한다(내부에서 av_packet_ref 복제 — 원본 pkt 불변). 레코더 오류는
+        // 격리되어 이 루프를 멈추지 않는다(D8).
+        serviceRecording(fmt->streams[vIdx], pkt);
+
         const int sendRc = avcodec_send_packet(dec, pkt);
         av_packet_unref(pkt);
         // 손상 패킷/일시적 HW 디코드 실패(VideoToolbox 재구성 시 -12909 등)는 비치명 —
@@ -303,6 +394,11 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
             av_frame_unref(frm);
         }
     }
+
+    // 소스가 닫히거나 재open(재연결)으로 이 demux가 끝나면 활성 레코더 세그먼트를 종료한다.
+    // (트레일러를 써서 MKV를 재생 가능 상태로 마감 — 재연결 후 RecordingController가
+    //  다시 startRecording하면 새 세그먼트가 된다. M3 설계: 재연결 시 세그먼트 분리.)
+    finishRecorder();
 
     if (sws != nullptr) sws_freeContext(sws);
     av_frame_free(&swf);

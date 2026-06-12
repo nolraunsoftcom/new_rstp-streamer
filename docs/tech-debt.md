@@ -32,7 +32,7 @@
 | 15 | HW 디코드 GPU→CPU 왕복 | VideoToolbox 디코드 후 av_hwframe_transfer_data로 CPU 복사 + sws RGBA + 텍스처 재업로드(동반-rgba). 진짜 zero-copy(CVPixelBuffer→CVMetalTextureCache) 미적용 — 20ch CPU의 주 오버헤드 | M2b 후속 성능 작업 (가장 큰 CPU 레버) |
 | 16 | 32ch 성능 미측정 | 시뮬 32 퍼블리셔가 측정 머신 포화 — 별도 부하 발생원/세션 필요 | 후속 (분리 측정) |
 | 17 | GPU framePainted 가시성 의존 | RhiVideoRenderer.render()가 compositing 시에만 호출 → 오프스크린/최소화 창은 표시단계 미확정(구 SW paintEvent도 동일 특성, 회귀 아님) | M3 (필요 시 보정) |
-| 18 | 저장 실패 UI 미표시 | save 실패가 로그 한 줄뿐 — 상태바/다이얼로그 미반영 | M3 (UI 알림) |
+| 18 | 저장 실패 UI 미표시 | save 실패가 로그 한 줄뿐 — 상태바/다이얼로그 미반영 | **부분(M3)**: 녹화 시작 실패는 `RecordingController`가 Idle 유지 + Warn 로그 + 옵저버로 UI에 비-녹화 상태 통지(● 버튼 빨강 미점등으로 시작 실패 가시화). 단 채널 설정 save 실패(`ChannelManager::persist`)·녹화 시작 실패의 **명시적 토스트/상태바 알림**은 미구현 — M4 UI 알림으로 이월 |
 | 19 | placeholder 풀 미축소 | hide만, 최대 셀 수로 유한 | 경미, 보류 |
 | 20 | 렌더러 RHI 프로브 미캐시 | selectRendererKind(true) 하드코딩, 타일별 폴백·미전역캐시 | zero-copy 묶음 |
 | 21 | present() 중복 + 프레임당 2번째 QImage 카피 | Rhi/Sw 8줄 복제, 초당 600 카피 | zero-copy 묶음 |
@@ -54,4 +54,33 @@
 |---|---|---|---|
 | 24 | 순차 다채널 종료 누적 지연 | close() 타임드 join 상한 5s → 20채널 순차 종료 시 최대 ~20s 소요. 병렬 disconnect는 teardown 순서 민감 — 보류. 실장비 wedge 발생 시 개선 우선순위 재검토 | 보류 (M3 이후) |
 
-남은 부채: #12(CompositeLogger, 해소됨/B3), #13(QString키, 해소됨/B5), #16(32ch 측정), #17(GPU 가시성 의존), #18(저장실패 UI), #19(placeholder 풀), #24(순차 종료 누적 지연), Windows D3D11 zero-copy(별도).
+남은 부채: #12(CompositeLogger, 해소됨/B3), #13(QString키, 해소됨/B5), #16(32ch 측정), #17(GPU 가시성 의존), #18(저장실패 UI — M3 부분 해소, 명시 알림 M4 이월), #19(placeholder 풀), #24(순차 종료 누적 지연), Windows D3D11 zero-copy(별도).
+
+## M3 (2026-06-13, 녹화/스냅샷)
+
+| # | 항목 | 내용 | 해소 시점 |
+|---|---|---|---|
+| 25 | 녹화 시작 실패 명시 알림 | 시작 실패가 Warn 로그 + ●버튼 미점등뿐 — 토스트/상태바 명시 알림 미구현(#18과 묶임) | M4 (UI 알림) |
+| 26 | 통합테스트 픽스처 GOP 의존 | 픽스처를 1초 키프레임으로 안정화(중간 합류 flaky 제거) — 단, 통합테스트가 여전히 고정 sleep 사용(#3)이라 매우 느린 CI에선 잔여 flaky 소지 | CI 도입 시(#3과 묶음) |
+| 27 | 주기 롤오버(maxDuration) tick 미배선 | `RecordingController::tick`(10분 세그먼트 롤오버)이 main 루프에 미배선 — onReconnect 분리만 배선됨. 장시간 단일 세그먼트가 커질 수 있음 | M4 (장시간 녹화 운영) |
+
+## M3 결함 수정 2차 (2026-06-13, 녹화 리뷰 D1~D5)
+
+해소:
+
+| 결함 | 내용 | 수정 |
+|---|---|---|
+| D1 | stop→start 래치 경합으로 세그먼트 롤오버 실패 | **해소** — `FfmpegStreamSource::startRecording`이 녹화 중에도 거절하지 않고 새 경로를 pending으로 수락. 디코드 스레드 `serviceRecording`이 `pendingPath != currentPath`를 감지해 finish→재start(세그먼트 전환을 디코드 스레드 단일 소유). control 스레드 래치 경합 제거. 통합테스트 #157(stop·유예 없는 즉시 전환) 추가 |
+| D2 | 같은 초 파일명 충돌 → 직전 세그먼트 truncate | **해소** — `RecordingController::makePath`에 단조 시퀀스(`_NNN`), `RecordingPaths::makePath`에 밀리초(`_zzz`)+프로세스 단조 카운터 추가. 단위테스트 2종 추가 |
+| D3 | REC 표시 불일치(디코드 스레드 start 실패 시 컨트롤러 영구 Recording) | **해소** — `tick()`에서 `sink.isRecording`과 컨트롤러 상태 대조, Recording인데 sink 비녹화면(유예 3초 후) Idle 수렴 + 경고 로그 + 옵저버 통지. 단위테스트 2종 추가 |
+| D4 | 스냅샷 PNG 인코딩이 control 스레드 블로킹 | **해소** — `ChannelSourceFactory::snapshot`이 RGBA 복사(latest)까지만 control 스레드, PNG 인코딩·저장은 detach 워커 스레드로 분리 |
+| D5 | FilePanel 썸네일 풀 디코드로 UI 멈춤 | **해소** — `QImageReader::setScaledSize`로 축소 디코드 + 경로+mtime 캐시(`QHash`) 재사용 |
+| (debt) | writePacket 오류 후 패킷마다 재시도+로그 스팸 | **해소** — `m_errored`면 조기 반환 |
+
+남은 부채(이번에 보류):
+
+| # | 항목 | 내용 | 해소 시점 |
+|---|---|---|---|
+| 28 | 음수 dts (avoid_negative_ts 의존) | FfmpegRecorder가 첫 키프레임 pts를 0으로 당기지만 B프레임 dts가 음수일 수 있어 muxer 기본(avoid_negative_ts=auto)에 의존. 명시 설정/주석 미정 | M4 |
+| 29 | RecordingState::Stopping 미사용 / sanitizeName 중복 | enum의 Stopping 상태 미사용(Idle/Recording만), 채널명 살균 로직이 RecordingController(std)와 RecordingPaths(Qt)에 중복. 정리 보류 | 정리 라운드 |
+| (기존 #25) | 디스크 용량 관리 부재 | 회전/상한 없음 | M4 |
