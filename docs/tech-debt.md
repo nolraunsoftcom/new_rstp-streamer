@@ -15,3 +15,11 @@
 | 9 | soak.csv 무한 append·상대경로 | 회전/상한 없음 | M2b ride-along (SoakLogger 추출) |
 | 10 | URL 평문 표시 | rtsp://user:pass@ 자격증명 화면 노출 | M2b ride-along (마스킹) |
 | 11 | 패널/컬럼 선택 미영속 | QSettings 저장 안 함 — 재시작 리셋 | M3 |
+
+## M2a 최종 리뷰(2026-06-12) 잔여 — 머지 승인됨, 비차단
+
+| # | 항목 | 내용 | 해소 |
+|---|---|---|---|
+| 12 | CompositeLogger::setCallback 스레드 안전성 | log()와 setCallback 간 미동기화 — 현재 teardown 순서(drain 후 호출)로 레이스 창 near-zero | M2b Task 3 (SoakLogger 작업 시 atomic 처리) |
+| 13 | GridView m_tiles QString 키 | relayout 핫패스에서 fromStdString 반복 — 32ch에서 무영향 | M2b Task 5 (렌더 개편 시 std::string 키로) |
+| 14 | 상태→한글/색 매핑 중복 | GridView·ChannelListPanel 2곳 복제 | M2b ride-along (StatusDisplay 추출) |
