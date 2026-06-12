@@ -11,7 +11,7 @@
 | 5 | UI 채널 목록 3중 캐시 | MainWindow/GridView/ChannelListPanel 수동 동기화 | M3 (UI 모델 단일화) |
 | 6 | GridView→infra 직접 의존 | 슬롯 조회 포트 부재 (헥사고날 위반) | **부분 해소(M2b)**: 포트(IFrameSurfaceRegistry)는 추가됐으나 GridView가 아직 concrete ChannelSourceFactory.slot() 사용. UI 전환은 zero-copy 작업과 함께 |
 | 7 | nextGridIndex O(n²)·전량 재직렬화 | 20~32ch 무시 가능 | 채널 수 확장 시 |
-| 8 | 슬롯 레지스트리 무한 증가 | 미해소 — destroySource 여전히 no-op(ChannelSourceFactory.cpp:17). chN ID 미재사용이라 add/remove 반복 시 누적(최대 채널수로 유한하지 않음). M3에서 슬롯 GC 또는 ID 재사용 | M3 |
+| 8 | 슬롯 레지스트리 무한 증가 | **해소 — destroySource가 slot->clear()로 GPU/RGBA 자원 반납(슬롯 객체는 폴링 안전 위해 보존). M2 안정성 리팩토링** | M2 안정성 리팩토링 |
 | 9 | soak.csv 무한 append·상대경로 | 회전/상한 없음 | M2b ride-along (SoakLogger 추출) |
 | 10 | URL 평문 표시 | 미수행 — M3로 재지정. rtsp://user:pass@ 형태를 화면·로그에서 마스킹 | M3 |
 | 11 | 패널/컬럼 선택 미영속 | QSettings 저장 안 함 — 재시작 리셋 | M3 |
@@ -48,4 +48,10 @@
 | 15 | HW 디코드 GPU→CPU 왕복 | **해소** — NV12 CVPixelBuffer→Metal createFrom 직행(C2/C3), 20ch CPU 131%→92.6% |
 | 20 | 렌더러 RHI 프로브 미캐시 | **해소**(C4) — 1회 프로브 정적 캐시, 타일별 폴백 폭풍 방지 |
 
-남은 부채: #12(CompositeLogger, 해소됨/B3), #13(QString키, 해소됨/B5), #16(32ch 측정), #17(GPU 가시성 의존), #18(저장실패 UI), #19(placeholder 풀), Windows D3D11 zero-copy(별도).
+## M2 안정성 리팩토링 (2026-06-13)
+
+| # | 항목 | 내용 | 해소 |
+|---|---|---|---|
+| 24 | 순차 다채널 종료 누적 지연 | close() 타임드 join 상한 5s → 20채널 순차 종료 시 최대 ~20s 소요. 병렬 disconnect는 teardown 순서 민감 — 보류. 실장비 wedge 발생 시 개선 우선순위 재검토 | 보류 (M3 이후) |
+
+남은 부채: #12(CompositeLogger, 해소됨/B3), #13(QString키, 해소됨/B5), #16(32ch 측정), #17(GPU 가시성 의존), #18(저장실패 UI), #19(placeholder 풀), #24(순차 종료 누적 지연), Windows D3D11 zero-copy(별도).

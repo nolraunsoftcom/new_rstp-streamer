@@ -15,6 +15,8 @@ add_executable(nv_unit_tests
   unit/ChannelControllerTest.cpp
   unit/ControlExecutorTest.cpp
   unit/LatestFrameSlotTest.cpp
+  unit/LatestSurfaceSlotTest.cpp
+  unit/FfmpegCloseTest.cpp
   unit/MarshallingTest.cpp
   unit/SnapshotObserverTest.cpp
   unit/GridRulesTest.cpp

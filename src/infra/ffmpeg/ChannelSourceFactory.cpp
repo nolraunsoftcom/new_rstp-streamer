@@ -15,7 +15,17 @@ std::unique_ptr<nv::app::IStreamSource> ChannelSourceFactory::createSource(
 }
 
 void ChannelSourceFactory::destroySource(const std::string& channelId) {
-    (void)channelId;   // 슬롯은 의도적으로 보관 (헤더 주석 참조)
+    // 슬롯 객체는 보존(폴링 안전 — UI 스레드의 latestSurface() 경합 방지),
+    // GPU/RGBA 자원만 해제 — ~11MB/채널 누수 방지 (부채 #8 해소).
+    // clear()는 슬롯 자체 뮤텍스로 보호되므로 UI 스레드와 안전.
+    // clear 직후 UI가 latest()하면 seq==0이라 false 반환(정상 동작).
+    LatestSurfaceSlot* s = nullptr;
+    {
+        std::lock_guard lk(m_mu);
+        auto it = m_slots.find(channelId);
+        if (it != m_slots.end()) s = it->second.get();
+    }
+    if (s != nullptr) s->clear();
 }
 
 bool ChannelSourceFactory::latestSurface(const std::string& channelId,

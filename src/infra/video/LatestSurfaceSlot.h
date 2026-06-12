@@ -107,6 +107,20 @@ public:
         return true;
     }
 
+    // 채널 영구 삭제 시 GPU/RGBA 자원을 반납한다 (~11MB/채널 누수 방지).
+    // 슬롯 객체 자체는 파괴하지 않는다 — UI 폴링 race 방지 불변량 유지.
+    // 이후 latest()는 seq==0으로 false를 반환하므로 소비자에 안전.
+    void clear() {
+        std::lock_guard lk(m_mu);
+        releaseGpuLocked(nullptr);   // GPU 핸들 해제
+        m_rgba.clear();
+        m_rgba.shrink_to_fit();      // RGBA 힙 메모리 반납 (~11MB/채널)
+        m_kind = nv::app::FrameSurface::Kind::None;
+        m_seq = 0;
+        m_width = 0;
+        m_height = 0;
+    }
+
     // 소비자가 latest()로 받은 GpuTexture 핸들을 다 그린 뒤 호출 — 슬롯이 건넨 추가 ref를 푼다.
     // (CoreVideo 의존을 슬롯에 격리하기 위한 헬퍼. refcounter 미설정이면 무동작.)
     void releaseConsumed(void* handle) {
