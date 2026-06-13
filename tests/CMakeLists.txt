@@ -30,6 +30,7 @@ add_executable(nv_unit_tests
   unit/RecordingControllerTest.cpp
   unit/SnapshotServiceTest.cpp
   unit/RelayPortsTest.cpp
+  unit/RelaySupervisorTest.cpp
 )
 target_include_directories(nv_unit_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(nv_unit_tests PRIVATE nv_domain nv_app nv_infra Catch2::Catch2WithMain Qt6::Core)

@@ -9,6 +9,7 @@ add_library(nv_app STATIC
   app/ChannelController.cpp
   app/ChannelManager.cpp
   app/RecordingController.cpp
+  app/RelaySupervisor.cpp
   app/SnapshotService.cpp
 )
 target_include_directories(nv_app PUBLIC ${CMAKE_SOURCE_DIR})
