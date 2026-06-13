@@ -38,7 +38,7 @@ target_compile_definitions(nv_unit_tests PRIVATE PROJECT_SOURCE_DIR="${CMAKE_SOU
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(CTest)
 include(Catch)
-catch_discover_tests(nv_unit_tests)
+catch_discover_tests(nv_unit_tests PROPERTIES SKIP_RETURN_CODE 4)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
 
