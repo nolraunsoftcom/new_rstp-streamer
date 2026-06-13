@@ -254,3 +254,58 @@ TEST_CASE("Idle에서 어댑터 이벤트는 모두 무시된다") {
     CHECK(sm.state() == ConnState::Idle);
     CHECK(sm.reconnectAttempts() == 0);
 }
+
+TEST_CASE("오프스크린 복원력: 표시 없이도 지속 스트리밍이면 패킷만으로 카운터가 리셋된다") {
+    auto sm = makeSm();
+    sm.connectRequested(t0);
+    sm.errorOccurred(DiagnosisReason::SessionRefused, t0 + 1s);  // attempts=1
+    REQUIRE(sm.reconnectAttempts() == 1);
+
+    sm.tick(t0 + 7s);                       // retryDelay(5s) 경과 → Connecting
+    sm.sessionOpened(t0 + 7s + 100ms);
+    auto now = t0 + 7s + 200ms;
+    sm.packetReceived(now);                 // → Streaming, streamingSince=now
+    REQUIRE(sm.state() == ConnState::Streaming);
+    CHECK(sm.reconnectAttempts() == 1);     // 아직 안정 윈도우(3s) 미경과 — 리셋 안 됨
+
+    // 프레임 표시(framePresented) 전혀 없이(오프스크린 모사) 지속 패킷만 공급
+    for (int i = 0; i < 5; ++i) { now += 1s; sm.packetReceived(now); }
+    CHECK(sm.reconnectAttempts() == 0);     // 지속 스트리밍 확인 → 표시 없이도 리셋
+}
+
+TEST_CASE("플래핑 보호: 안정 윈도우 미만의 짧은 스트리밍은 카운터를 리셋하지 않는다") {
+    auto sm = makeSm();
+    sm.connectRequested(t0);
+    sm.errorOccurred(DiagnosisReason::SessionRefused, t0 + 1s);  // attempts=1
+    REQUIRE(sm.reconnectAttempts() == 1);
+
+    sm.tick(t0 + 7s);
+    sm.sessionOpened(t0 + 7s + 100ms);
+    auto now = t0 + 7s + 200ms;
+    sm.packetReceived(now);                 // Streaming 진입
+    now += 1s; sm.packetReceived(now);      // 윈도우(3s) 미만 — 아직 리셋 금지
+    CHECK(sm.reconnectAttempts() == 1);
+
+    // 곧 stall로 빠지면 카운터는 누적된다(리셋되지 않았으므로 2가 됨)
+    sm.tick(now + 10100ms);
+    CHECK(sm.state() == ConnState::Stalled);
+    CHECK(sm.reconnectAttempts() == 2);     // 리셋 안 됐으니 1→2 누적
+}
+
+TEST_CASE("재진입: stall 후 다시 스트리밍하면 안정 윈도우가 새로 시작된다") {
+    auto sm = makeSm();
+    sm.connectRequested(t0);
+    sm.sessionOpened(t0 + 100ms);
+    auto now = t0 + 200ms;
+    sm.packetReceived(now);                 // Streaming
+    now += 10100ms; sm.tick(now);           // stall → Stalled, attempts=1, streamingSince clear
+    REQUIRE(sm.state() == ConnState::Stalled);
+    REQUIRE(sm.reconnectAttempts() == 1);
+
+    now += 5100ms; sm.tick(now);            // retryDelay → Connecting
+    sm.sessionOpened(now + 100ms);
+    now += 200ms; sm.packetReceived(now);   // 재진입 → 새 streamingSince
+    CHECK(sm.reconnectAttempts() == 1);     // 재진입 직후 — 윈도우 리셋, 아직 0 아님
+    for (int i = 0; i < 5; ++i) { now += 1s; sm.packetReceived(now); }
+    CHECK(sm.reconnectAttempts() == 0);     // 새 윈도우 충족 → 리셋
+}

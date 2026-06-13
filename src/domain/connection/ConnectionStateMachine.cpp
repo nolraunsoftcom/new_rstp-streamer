@@ -12,6 +12,7 @@ Transition ConnectionStateMachine::connectRequested(TimePoint now) {
     m_dataDeadline.reset();
     m_lastPacketAt.reset();
     m_retryAt.reset();
+    m_streamingSince.reset();
     m_state = ConnState::Connecting;
     return {Action::OpenSource};
 }
@@ -23,6 +24,7 @@ Transition ConnectionStateMachine::disconnectRequested(TimePoint now) {
     m_dataDeadline.reset();
     m_lastPacketAt.reset();
     m_retryAt.reset();
+    m_streamingSince.reset();
     m_state = ConnState::Idle;
     return {Action::CloseSource};
 }
@@ -53,9 +55,18 @@ Transition ConnectionStateMachine::packetReceived(TimePoint now) {
     if (m_state == ConnState::SessionOpen) {
         m_state = ConnState::Streaming;
         m_dataDeadline.reset();
+        m_streamingSince = now;        // 스트리밍 진입 시각 기록(지속성 리셋 기준)
     }
     if (m_state == ConnState::Streaming) {
         m_lastPacketAt = now;
+        // 표시(framePresented)와 무관하게, 지속 스트리밍이 확인되면 재시도 카운터를 리셋한다.
+        // 오프스크린 타일은 프레임을 표시하지 않아 framePresented가 오지 않으므로, 가시성에
+        // 독립적인 복원력을 위해 패킷 흐름 기반으로도 리셋한다(stall 감지와 동일 기반).
+        if (m_streamingSince &&
+            now - *m_streamingSince >= m_reconnect.streamingStableReset) {
+            m_attempts = 0;
+            m_lastReason = DiagnosisReason::None;
+        }
     }
     return {};
 }
@@ -75,6 +86,7 @@ Transition ConnectionStateMachine::beginRetryOrFail(DiagnosisReason reason, Conn
     m_lastReason = reason;
     m_dataDeadline.reset();
     m_lastPacketAt.reset();
+    m_streamingSince.reset();
     ++m_attempts;
     if (m_attempts > m_reconnect.maxAttempts) {
         // D1(3차 리뷰): Failed = 고속 재시도 중지 + 저빈도 재시도 모드. 영구 정지가 아니다.

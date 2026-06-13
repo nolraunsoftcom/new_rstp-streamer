@@ -68,6 +68,7 @@ private:
     std::optional<TimePoint> m_dataDeadline;   // SessionOpen: 첫 패킷 데드라인
     std::optional<TimePoint> m_lastPacketAt;   // Streaming: stall 감지용
     std::optional<TimePoint> m_retryAt;        // Reconnecting/Stalled/Failed: 재시도 시각
+    std::optional<TimePoint> m_streamingSince;  // Streaming 진입 시각 — 지속성 리셋 기준
 };
 
 } // namespace nv::domain
