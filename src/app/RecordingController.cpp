@@ -245,10 +245,11 @@ void RecordingController::tick() {
             continue;
         }
 
-        // 확인된 정상 세그먼트: 여기 도달 = Recording && grace 경과 && isRecording && 무오류.
-        // 디스크가 복구돼 실제로 녹화가 진행 중이면 디스크오류 백오프를 리셋한다(장시간 운영 중
-        // 간헐 오류가 누적돼 거짓 disarm 되는 것을 막는다).
-        if (elapsed >= kReconcileGrace && m_sink.isRecording(id)) {
+        // 확인된 정상 세그먼트: 여기 도달 = Recording && 윈도우 경과 && isRecording && 무오류.
+        // 윈도우는 grace(3s)가 아니라 kDiskHealthyResetWindow(30s) — avio 버퍼 윈도우(수초)에
+        // 거짓 리셋되어 백오프가 무력화되는 것을 막는다. 진짜 지속 녹화만 디스크오류 백오프를
+        // 리셋한다(장시간 운영 중 간헐 오류 누적으로 인한 거짓 disarm도 방지).
+        if (elapsed >= kDiskHealthyResetWindow && m_sink.isRecording(id)) {
             ch.diskErrors = 0;
         }
 

@@ -73,6 +73,12 @@ private:
     static constexpr unsigned kMaxStartFailures = 5;
     // D10: 디스크/쓰기 오류 연속 수렴이 이 횟수에 도달하면 armed=false + 1회 경고(디스크 확인 필요).
     static constexpr unsigned kMaxDiskErrors = 5;
+    // D10: 디스크오류 백오프 리셋은 "지속된 정상 녹화"에서만 일어나야 한다. avio 버퍼링 탓에
+    // 가득 찬 디스크에서도 새 세그먼트가 열린 직후 수초간 isRecording==true·무오류 윈도우가
+    // 생긴다 — 이 짧은 윈도우(grace 3s)에 리셋되면 diskErrors가 임계에 못 가 무한 churn이
+    // 된다(실측: 30+ 0바이트 파일, disarm 0회). 버퍼 플러시/오류표면화 간격보다 충분히 큰
+    // 윈도우를 둬 진짜 지속 녹화만 리셋한다.
+    static constexpr std::chrono::seconds kDiskHealthyResetWindow{30};
 
     // outputPath 생성: <baseDir>/<channelName>_<yyyyMMdd_HHmmss>.mkv
     // baseDir은 환경변수 NV_RECORD_DIR or 현재 작업 디렉토리(테스트 친화적).

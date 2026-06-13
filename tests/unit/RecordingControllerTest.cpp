@@ -670,7 +670,7 @@ TEST_CASE("D10 백오프: 디스크 복구 후 정상 세그먼트가 diskErrors
     sink.setRecordingError("ch1", false);
     ctrl.tick();                               // D1 재시도 → doStart 성공 → Recording
     REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
-    clock.advance(std::chrono::seconds{4});    // grace(3s) 경과
+    clock.advance(std::chrono::seconds{31});   // kDiskHealthyResetWindow(30s) 경과
     ctrl.tick();                               // 확인된 정상 세그먼트 → diskErrors 리셋
     CHECK(ctrl.stateOf("ch1") == RecordingState::Recording);
 
@@ -679,4 +679,41 @@ TEST_CASE("D10 백오프: 디스크 복구 후 정상 세그먼트가 diskErrors
     const int startsBefore = sink.startCount;
     for (int i = 0; i < 4; ++i) ctrl.tick();   // 임계(5) 미만이라 아직 재시도 지속
     CHECK(sink.startCount > startsBefore);      // 카운터가 리셋됐으므로 재시도가 계속됨(즉시 중단 아님)
+}
+
+TEST_CASE("D10 백오프(회귀): 짧은 무오류 윈도우(avio 버퍼)가 있어도 diskErrors가 임계까지 누적돼 disarm된다") {
+    FakeClock clock;
+    FakeRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{600}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    ctrl.toggle("ch1", "Cam1");
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+
+    // 실디스크풀 사이클 모사: 오류 표면화 → 수렴 → 재시도 doStart → (avio 버퍼 덕에) 잠깐
+    // isRecording==true·무오류 윈도우(윈도우 30s 미만이라 리셋 금지여야 함) → 다시 오류.
+    // 윈도우가 30s 미만이면 diskErrors가 리셋되지 않고 누적돼 임계(5)에서 disarm되어야 한다.
+    for (int cycle = 0; cycle < 12; ++cycle) {
+        sink.setRecordingError("ch1", true);     // 버퍼 플러시 시 ENOSPC 표면화
+        clock.advance(std::chrono::seconds{1});
+        ctrl.tick();                              // hasRecordingError → 수렴(++diskErrors), stop
+        sink.setRecordingError("ch1", false);     // 다음 세그먼트는 잠깐 무오류(버퍼 윈도우)
+        ctrl.tick();                              // D1 재시도 → doStart → Recording(isRecording=true)
+        clock.advance(std::chrono::seconds{5});   // 5s < 30s 윈도우 — 리셋되면 안 됨
+        ctrl.tick();                              // 짧은 무오류 윈도우 tick (거짓 리셋 시도 지점)
+    }
+
+    // 임계 누적으로 disarm되어 churn이 멈춰야 한다: 더 돌려도 새 시작이 늘지 않는다.
+    const int startsAfter = sink.startCount;
+    sink.setRecordingError("ch1", true);
+    for (int i = 0; i < 10; ++i) ctrl.tick();
+    CHECK(sink.startCount == startsAfter);          // churn 중단(추가 시작 없음)
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Idle);
+
+    const bool disarmWarn = std::any_of(logger.entries.begin(), logger.entries.end(),
+        [](const auto& e){ return e.level == nv::app::LogLevel::Warn &&
+                                  e.message.find("디스크") != std::string::npos &&
+                                  e.message.find("반복") != std::string::npos; });
+    CHECK(disarmWarn);
 }
