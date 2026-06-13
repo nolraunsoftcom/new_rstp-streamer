@@ -41,6 +41,7 @@ add_library(nv_infra STATIC
   infra/ffmpeg/ChannelSourceFactory.cpp
   infra/persist/JsonChannelRepository.cpp
   infra/persist/PngSnapshotWriter.cpp
+  infra/relay/MediaMtxConfigWriter.cpp
   infra/system/ResourceMonitor.cpp
 )
 target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
