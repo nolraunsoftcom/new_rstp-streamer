@@ -12,6 +12,7 @@ add_executable(nv_unit_tests
   unit/SmokeTest.cpp
   unit/StreamHealthTest.cpp
   unit/ConnectionStateMachineTest.cpp
+  unit/RelayConfigTest.cpp
   unit/ChannelControllerTest.cpp
   unit/ControlExecutorTest.cpp
   unit/LatestFrameSlotTest.cpp

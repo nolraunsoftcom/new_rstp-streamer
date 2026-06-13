@@ -1,5 +1,6 @@
 add_library(nv_domain STATIC
   domain/connection/ConnectionStateMachine.cpp
+  domain/relay/RelayConfig.cpp
 )
 target_include_directories(nv_domain PUBLIC ${CMAKE_SOURCE_DIR})
 target_compile_options(nv_domain PRIVATE -Wall -Wextra -Wpedantic)
