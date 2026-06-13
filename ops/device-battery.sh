@@ -46,7 +46,7 @@ echo "== Phase1 녹화 세그먼트 ==" >> "$DIR/summary.txt"
 check_mkv "$REC"
 SNAP=$(ls "$REC"/*.png 2>/dev/null | wc -l | tr -d ' ')
 BAD=0; for p in "$REC"/*.png; do [ -f "$p" ] || continue; ffprobe -v error "$p" >/dev/null 2>&1 || BAD=$((BAD+1)); done
-echo "  스냅샷 PNG: $SNAP개 (손상 $BAD)" >> "$DIR/summary.txt"
+echo "  스냅샷 PNG: ${SNAP}개 (손상 ${BAD})" >> "$DIR/summary.txt"
 mv "$REC"/*.mkv "$DIR/p1-recs/" 2>/dev/null || true
 mv "$REC"/*.png "$DIR/p1-snaps/" 2>/dev/null || true
 
