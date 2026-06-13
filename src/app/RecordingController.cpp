@@ -230,9 +230,26 @@ void RecordingController::tick() {
                          "디스크/쓰기 오류로 녹화 중단 — Idle로 수렴(REC 해제)");
             m_sink.stopRecording(id);
             ch.state = nv::domain::RecordingState::Idle;
-            ch.retryStart = true;   // D1: 디스크 복구 시 tick이 새 세그먼트로 자동 재개
+            // D10 백오프: 디스크오류 수렴은 doStart가 매번 "성공"(래치)이라 startFailures를
+            // 리셋해버려 무한 churn이 된다. 별도 카운터로 연속 디스크오류를 누적해 임계 도달 시
+            // armed를 내려 churn(매 사이클 새 .mkv 생성 + 쓰기스레드 spawn/join)을 멈춘다.
+            if (++ch.diskErrors >= kMaxDiskErrors && ch.armed) {
+                ch.armed = false;
+                ch.retryStart = false;   // 재시도 중단 — 디스크가 비워질 때까지 멈춤
+                m_logger.log(LogLevel::Warn, id, "RecordingController",
+                             "디스크/쓰기 오류 반복 — 녹화 중단, 디스크 공간 확인 필요");
+            } else {
+                ch.retryStart = true;   // D1: 디스크 복구 시 tick이 새 세그먼트로 자동 재개
+            }
             notify(id, nv::domain::RecordingState::Idle);
             continue;
+        }
+
+        // 확인된 정상 세그먼트: 여기 도달 = Recording && grace 경과 && isRecording && 무오류.
+        // 디스크가 복구돼 실제로 녹화가 진행 중이면 디스크오류 백오프를 리셋한다(장시간 운영 중
+        // 간헐 오류가 누적돼 거짓 disarm 되는 것을 막는다).
+        if (elapsed >= kReconcileGrace && m_sink.isRecording(id)) {
+            ch.diskErrors = 0;
         }
 
         if (elapsed >= m_policy.maxDuration) {

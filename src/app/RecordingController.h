@@ -62,10 +62,17 @@ private:
         // 재시도하게 하는 게이트. onReconnect의 드롭 엣지(소스가 죽어가는 중, onStreaming
         // 복구를 기다림)에서는 false라 tick이 죽은 소스에 재시도하지 않는다(백오프 오염 방지).
         bool retryStart{false};
+        // D10 백오프: 디스크/쓰기 오류로 연속 수렴(hasRecordingError)된 횟수. kMaxDiskErrors
+        // 도달 시 armed를 내려 무한 파일/스레드 churn을 멈춘다(디스크 풀 등). 확인된 정상
+        // 세그먼트(grace 경과·isRecording·무오류)에서 0으로 리셋된다. startFailures(동기
+        // startRecording==false 경로)와 별개 카운터 — 디스크오류는 비동기 쓰기 시점에 나기 때문.
+        unsigned diskErrors{0};
     };
 
     // D2: doStart 연속 실패가 이 횟수에 도달하면 armed=false + 1회 경고(사용자 재시도 필요).
     static constexpr unsigned kMaxStartFailures = 5;
+    // D10: 디스크/쓰기 오류 연속 수렴이 이 횟수에 도달하면 armed=false + 1회 경고(디스크 확인 필요).
+    static constexpr unsigned kMaxDiskErrors = 5;
 
     // outputPath 생성: <baseDir>/<channelName>_<yyyyMMdd_HHmmss>.mkv
     // baseDir은 환경변수 NV_RECORD_DIR or 현재 작업 디렉토리(테스트 친화적).
