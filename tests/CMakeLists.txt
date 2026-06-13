@@ -44,7 +44,7 @@ include(CTest)
 include(Catch)
 catch_discover_tests(nv_unit_tests PROPERTIES SKIP_RETURN_CODE 4)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Test Network)
 
 add_executable(nv_ui_tests
   unit/VideoTileWidgetTest.cpp
@@ -59,8 +59,9 @@ catch_discover_tests(nv_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscre
 add_executable(nv_integration_tests
   integration/FfmpegSourceIT.cpp
   integration/FfmpegRecorderIT.cpp
+  integration/RelayControlApiIT.cpp
 )
 target_include_directories(nv_integration_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(nv_integration_tests PRIVATE nv_infra Catch2::Catch2WithMain)
+target_link_libraries(nv_integration_tests PRIVATE nv_infra Catch2::Catch2WithMain Qt6::Core Qt6::Network)
 target_compile_definitions(nv_integration_tests PRIVATE PROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 catch_discover_tests(nv_integration_tests PROPERTIES LABELS integration SKIP_RETURN_CODE 4)

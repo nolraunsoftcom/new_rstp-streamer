@@ -30,7 +30,7 @@ else()
     libavformat libavcodec libavutil libswscale)
 endif()
 
-find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets Core Gui GuiPrivate ShaderTools)
+find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets Core Gui GuiPrivate ShaderTools Network)
 
 add_library(nv_infra STATIC
   infra/system/ControlExecutor.cpp
@@ -42,6 +42,7 @@ add_library(nv_infra STATIC
   infra/persist/JsonChannelRepository.cpp
   infra/persist/PngSnapshotWriter.cpp
   infra/relay/MediaMtxConfigWriter.cpp
+  infra/relay/HttpRelayControlApi.cpp
   infra/system/ResourceMonitor.cpp
 )
 target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
@@ -53,11 +54,12 @@ if(WIN32)
   # d3d11 / dxgi는 FFmpeg avcodec이 내부적으로 요구; 명시 링크로 확실히 해결.
   target_include_directories(nv_infra PUBLIC ${FFMPEG_INCLUDE_DIRS})
   # Qt6::Gui — PngSnapshotWriter의 QImage(PNG 저장). Core는 JsonChannelRepository/RecordingPaths.
-  target_link_libraries(nv_infra PUBLIC nv_app Qt6::Core Qt6::Gui ${FFMPEG_LIBRARIES} d3d11 dxgi)
+  target_link_libraries(nv_infra PUBLIC nv_app Qt6::Core Qt6::Gui Qt6::Network ${FFMPEG_LIBRARIES} d3d11 dxgi)
 else()
   # macOS/Linux: pkg-config IMPORTED_TARGET 사용.
   # Qt6::Gui — PngSnapshotWriter의 QImage(PNG 저장).
-  target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG Qt6::Core Qt6::Gui)
+  # Qt6::Network — HttpRelayControlApi(Control API HTTP 조회).
+  target_link_libraries(nv_infra PUBLIC nv_app PkgConfig::FFMPEG Qt6::Core Qt6::Gui Qt6::Network)
 endif()
 
 # macOS: VideoToolbox HW 디코딩 — CVPixelBuffer 수명 관리에 CoreVideo 필요.
