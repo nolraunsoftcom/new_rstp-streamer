@@ -32,9 +32,14 @@ void ChannelManager::bindObserver(const std::string& id, Entry& e) {
 
 ChannelManager::Entry& ChannelManager::makeEntry(ChannelConfig cfg) {
     const std::string id = cfg.id;
+    // relay 모드: 앱이 연결할 URL은 로컬 relay(127.0.0.1:8554/<id>), cfg.url은 장비 URL 유지.
+    // 직결 모드: cfg.url 그대로.
+    const std::string connectUrl = cfg.useRelay
+                                       ? nv::domain::relayUrlFor(id)
+                                       : cfg.url;
     auto source = m_factory.createSource(id);
-    auto ctrl = std::make_unique<ChannelController>(id, cfg.url, *source, m_clock, m_logger,
-                                                    m_reconnect, m_stall);
+    auto ctrl = std::make_unique<ChannelController>(id, connectUrl, *source, m_clock, m_logger,
+                                                    m_reconnect, m_stall, cfg.useRelay);
     auto [it, ok] = m_entries.emplace(id,
                                       Entry{std::move(cfg), std::move(source), std::move(ctrl)});
     (void)ok;

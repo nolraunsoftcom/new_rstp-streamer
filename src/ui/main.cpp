@@ -11,16 +11,24 @@
 #include <csignal>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 #include <sys/socket.h>
 #include <unistd.h>
 #include "src/app/ChannelManager.h"
 #include "src/app/RecordingController.h"
+#include "src/app/RelaySupervisor.h"
 #include "src/app/SnapshotService.h"
+#include "src/domain/channel/ChannelConfig.h"
 #include "src/domain/recording/RecordingState.h"
+#include "src/domain/relay/RelayConfig.h"
 #include "src/infra/ffmpeg/ChannelSourceFactory.h"
 #include "src/infra/persist/JsonChannelRepository.h"
 #include "src/infra/persist/RecordingPaths.h"
+#include "src/infra/relay/HttpRelayControlApi.h"
+#include "src/infra/relay/MediaMtxConfigWriter.h"
+#include "src/infra/relay/RelayServiceManagerFactory.h"
 #include "src/infra/system/CompositeLogger.h"
 #include "src/infra/system/ControlExecutor.h"
 #include "src/infra/system/SoakLogger.h"
@@ -387,6 +395,52 @@ int main(int argc, char** argv) {
 
     const bool autoConnect = QApplication::arguments().contains(QStringLiteral("--connect"));
     executor.post([&, autoConnect] { mgr.restore(autoConnect); });
+
+    // --- M4: relay 배선 ---
+    // relay 모드 채널 목록 구성 (repo에서 직접 읽어 RelayPath 벡터 생성).
+    // mgr.configs()는 control 스레드에서만 안전하므로 여기서는 repo.load()를 재사용.
+    // cfg.url = 장비 URL (relay yml의 source), cfg.id = mediamtx path 이름.
+    std::vector<nv::domain::RelayPath> relayChannels;
+    for (const auto& cfg : repo.load()) {
+        if (cfg.useRelay)
+            relayChannels.push_back({cfg.id, cfg.url, true});
+    }
+
+    // relay 인프라 객체: 스택 수명 — mgr/executor와 같은 스코프에 살아 이벤트 루프보다 오래 산다.
+    // relaySvc가 null(미지원 OS)이거나 relayChannels가 비어있으면 아래 블록 전체 건너뜀.
+    nv::infra::MediaMtxConfigWriter relayWriter;
+    nv::infra::HttpRelayControlApi  relayApi;           // 기본값: 127.0.0.1:9997, timeout 2s
+    auto relaySvc = nv::infra::makeRelayServiceManager();
+    std::optional<nv::app::RelaySupervisor> relaySup;  // 플랫폼 지원 시만 생성
+
+    if (!relayChannels.empty() && relaySvc) {
+        relaySup.emplace(*relaySvc, relayApi, logger, relayWriter.asCallback());
+
+        const std::string relayCfgPath =
+            (cfgDir + QStringLiteral("/mediamtx.yml")).toStdString();
+
+        // ① 설정 생성 ② 검증 ③ 기록 ④ 서비스 기동 — startup-only, 멱등.
+        // 실패(검증 오류/서비스 기동 불가)는 ensureUp 내부에서 logger에 기록하고 false 반환.
+        // viewer는 계속 실행(relay 없이 직결 폴백은 없으나 채널은 연결 시도함).
+        relaySup->ensureUp(relayChannels, relayCfgPath);
+
+        // 헬스 폴링: 3초마다 main 스레드 QTimer → control 스레드 executor.post
+        // QEventLoop 기반 동기 HTTP 호출이므로 Qt event loop가 있는 main 스레드에서 pollHealth.
+        auto* relayTimer = new QTimer(&app);
+        relayTimer->setInterval(3000);
+        QObject::connect(relayTimer, &QTimer::timeout, [&] {
+            auto health = relaySup->pollHealth(relayChannels);   // main 스레드 (QEventLoop ok)
+            executor.post([health, &mgr] {                        // control 스레드로 마샬
+                for (const auto& [id, h] : health) {
+                    if (auto* c = mgr.controller(id))
+                        c->onRelayHealth(h.up, h.reason);
+                }
+            });
+        });
+        relayTimer->start();
+    }
+    // relay 블록 끝 — relay 채널 없거나 relaySvc==null이면 위 블록 전체 건너뜀,
+    // 앱은 기존 직결 동작 그대로.
 
     // --- 소크 통계 (60초마다 RSS + 표시 fps 기록 — 4컬럼) ---
     const QString logsDir = cfgDir + QStringLiteral("/logs");
