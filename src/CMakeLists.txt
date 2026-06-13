@@ -43,6 +43,7 @@ add_library(nv_infra STATIC
   infra/persist/PngSnapshotWriter.cpp
   infra/relay/MediaMtxConfigWriter.cpp
   infra/relay/HttpRelayControlApi.cpp
+  infra/relay/RelayServiceManagerFactory.cpp
   infra/system/ResourceMonitor.cpp
 )
 target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
@@ -67,11 +68,16 @@ endif()
 #   Metal/CoreVideo/Foundation 프레임워크 링크. 비-Apple은 .mm 제외(헤더만 — Obj-C++는
 #   Apple 전용이라 컴파일 불가; VtMetalBridge 호출측이 아직 없어 심볼 누락 없음).
 if(APPLE)
-  target_sources(nv_infra PRIVATE infra/video/VtMetalBridge.mm)
+  target_sources(nv_infra PRIVATE
+    infra/video/VtMetalBridge.mm
+    infra/relay/LaunchdRelayService.cpp)
   target_link_libraries(nv_infra PUBLIC
     "-framework CoreVideo"
     "-framework Metal"
     "-framework Foundation")
+elseif(WIN32)
+  target_sources(nv_infra PRIVATE
+    infra/relay/WindowsRelayService.cpp)
 endif()
 
 set(CMAKE_AUTORCC ON)

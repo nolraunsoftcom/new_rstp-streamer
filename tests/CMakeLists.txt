@@ -60,6 +60,7 @@ add_executable(nv_integration_tests
   integration/FfmpegSourceIT.cpp
   integration/FfmpegRecorderIT.cpp
   integration/RelayControlApiIT.cpp
+  integration/LaunchdRelayServiceIT.cpp
 )
 target_include_directories(nv_integration_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(nv_integration_tests PRIVATE nv_infra Catch2::Catch2WithMain Qt6::Core Qt6::Network)
