@@ -104,6 +104,61 @@ TEST_CASE("늦은 소스 이벤트(close 이후)는 상태를 바꾸지 않는�
     CHECK(f.ctrl.state() == ConnState::Idle);
 }
 
+// ────────────────────────────────────────────
+// relay 모드 테스트
+// ────────────────────────────────────────────
+namespace {
+struct RelayFixture {
+    FakeClock clock;
+    FakeStreamSource source;
+    FakeLogger logger;
+    ChannelController ctrl{"ch1", "rtsp://127.0.0.1:8554/ch1",
+                           source, clock, logger,
+                           ReconnectPolicy{}, StallPolicy{},
+                           /*useRelay=*/true};
+};
+}
+
+TEST_CASE("relay 모드: onRelayHealth(up=true) → RelayIntake=Ok") {
+    RelayFixture f;
+    f.ctrl.onRelayHealth(true, DiagnosisReason::None);
+    CHECK(f.ctrl.health().stageState(HealthStage::RelayIntake) == StageState::Ok);
+}
+
+TEST_CASE("relay 모드: onRelayHealth(up=false, RelayNoSource) → RelayIntake=Failed, 사유 RelayNoSource") {
+    RelayFixture f;
+    f.ctrl.onRelayHealth(false, DiagnosisReason::RelayNoSource);
+    CHECK(f.ctrl.health().stageState(HealthStage::RelayIntake) == StageState::Failed);
+    CHECK(f.ctrl.health().failedReason() == DiagnosisReason::RelayNoSource);
+}
+
+TEST_CASE("relay 모드: Failed 상태에서 onRelayHealth(up=true) → sourceAvailableHint로 Connecting 전이") {
+    RelayFixture f;
+    f.ctrl.connect();
+    // 가짜연결 사이클로 Failed 상태까지 구동
+    while (f.ctrl.state() != ConnState::Failed) {
+        if (f.source.listener()) f.source.listener()->onSessionOpened();
+        f.clock.advance(6s);
+        f.ctrl.tick();
+        f.clock.advance(6s);
+        f.ctrl.tick();
+    }
+    REQUIRE(f.ctrl.state() == ConnState::Failed);
+    const int opensAtFailed = f.source.openCount;
+    f.ctrl.onRelayHealth(true, DiagnosisReason::None);
+    CHECK(f.ctrl.state() == ConnState::Connecting);
+    CHECK(f.source.openCount == opensAtFailed + 1);
+}
+
+TEST_CASE("직결 모드: onRelayHealth 무동작, RelayIntake=NotApplicable 유지") {
+    Fixture f;  // 직결 모드 (useRelay=false)
+    CHECK(f.ctrl.health().stageState(HealthStage::RelayIntake) == StageState::NotApplicable);
+    f.ctrl.onRelayHealth(true, DiagnosisReason::None);
+    CHECK(f.ctrl.health().stageState(HealthStage::RelayIntake) == StageState::NotApplicable);
+    f.ctrl.onRelayHealth(false, DiagnosisReason::RelayDown);
+    CHECK(f.ctrl.health().stageState(HealthStage::RelayIntake) == StageState::NotApplicable);
+}
+
 TEST_CASE("D1: Failed 후 notifySourceAvailable → 즉시 재오픈 (relay 헬스 부활 경로)") {
     Fixture f;
     f.ctrl.connect();

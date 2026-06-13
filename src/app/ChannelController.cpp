@@ -11,11 +11,15 @@ using nv::domain::Transition;
 ChannelController::ChannelController(std::string channelId, std::string url,
                                      IStreamSource& source, const IClock& clock, ILogger& logger,
                                      nv::domain::ReconnectPolicy reconnect,
-                                     nv::domain::StallPolicy stall)
+                                     nv::domain::StallPolicy stall,
+                                     bool useRelay)
     : m_channelId(std::move(channelId)), m_url(std::move(url)),
+      m_useRelay(useRelay),
       m_source(source), m_clock(clock), m_logger(logger), m_sm(reconnect, stall) {
-    // M1은 직결 모드 — relay 단계는 측정 대상이 아님 (M4에서 모드별 설정으로 바뀐다)
-    m_health.markNotApplicable(HealthStage::RelayIntake);
+    // relay 모드: RelayIntake는 Unknown(헬스 주입 대기). 직결 모드: NotApplicable.
+    if (!m_useRelay) {
+        m_health.markNotApplicable(HealthStage::RelayIntake);
+    }
 }
 
 void ChannelController::apply(const Transition& t) {
@@ -158,6 +162,17 @@ void ChannelController::onFramePresented() {
                      "first frame presented", m_sm.lastReason());
     }
     notifyIfChanged();
+}
+
+void ChannelController::onRelayHealth(bool deviceLegUp, DiagnosisReason reasonIfDown) {
+    if (!m_useRelay) return;
+    if (deviceLegUp) {
+        m_health.markReached(HealthStage::RelayIntake);
+        notifySourceAvailable();  // Failed 상태이면 sourceAvailableHint로 즉시 재접속
+    } else {
+        m_health.markFailed(HealthStage::RelayIntake, reasonIfDown);
+        notifyIfChanged();
+    }
 }
 
 void ChannelController::onSourceError(DiagnosisReason reason) {

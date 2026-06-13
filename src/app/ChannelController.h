@@ -18,13 +18,20 @@ class ChannelController final : public StreamSourceListener {
 public:
     ChannelController(std::string channelId, std::string url,
                       IStreamSource& source, const IClock& clock, ILogger& logger,
-                      nv::domain::ReconnectPolicy reconnect, nv::domain::StallPolicy stall);
+                      nv::domain::ReconnectPolicy reconnect, nv::domain::StallPolicy stall,
+                      bool useRelay = false);
 
     void connect();
     void disconnect();
     void retry();                  // Failed에서 수동 재시도 (카운터 리셋)
     void notifySourceAvailable();  // relay 헬스체크의 소스 복귀 신호 (M4에서 배선, D1)
     void tick();                   // 1초 주기로 호출
+
+    // relay 모드 채널 전용: RelaySupervisor가 폴링한 장비→relay leg 상태를 주입.
+    // up=true  → RelayIntake=Ok, 그리고 (Failed 상태였다면) sourceAvailableHint로 즉시 재접속.
+    // up=false → RelayIntake=Failed(reason: RelayDown 또는 RelayNoSource).
+    // 직결 모드 채널에서는 무동작.
+    void onRelayHealth(bool deviceLegUp, nv::domain::DiagnosisReason reasonIfDown);
 
     void setUrl(std::string url);  // Idle에서만 적용. 그 외 상태에선 무시.
     void setObserver(std::function<void(const ChannelSnapshot&)> obs);
@@ -47,6 +54,7 @@ private:
 
     std::string m_channelId;
     std::string m_url;
+    bool m_useRelay = false;
     IStreamSource& m_source;
     const IClock& m_clock;
     ILogger& m_logger;
