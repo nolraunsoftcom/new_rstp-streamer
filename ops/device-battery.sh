@@ -18,7 +18,7 @@ adb shell "journalctl -u voxl-streamer -f --output short-iso" > "$DIR/device.log
 DEV=$!
 # RSS/연결수 샘플러(30초) — 올바른 프로세스 매칭, MB 출력
 ( while true; do
-    PID=$(pgrep -f "$PROCMATCH" | head -1)
+    PID=$(pgrep -x new_viewer | head -1)
     RSS=$(ps -o rss= -p "$PID" 2>/dev/null | tr -d ' ')
     [ -n "$RSS" ] && echo "$(date +%s) rss_mb=$((RSS/1024)) est=$(netstat -an|grep 8900|grep -c ESTABLISHED)"
     sleep 30
