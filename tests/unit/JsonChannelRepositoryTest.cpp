@@ -99,7 +99,7 @@ TEST_CASE("envelope 형식 저장→로드 라운드트립") {
         REQUIRE(f.open(QIODevice::ReadOnly));
         const auto doc = QJsonDocument::fromJson(f.readAll());
         REQUIRE(doc.isObject());
-        CHECK(doc.object().value("version").toInt() == 1);
+        CHECK(doc.object().value("version").toInt() == 2);
         CHECK(doc.object().contains("channels"));
     }
 
@@ -128,13 +128,13 @@ TEST_CASE("구버전 최상위 배열도 로드된다(하위호환)") {
     CHECK(out[0].gridIndex == 2);
 }
 
-TEST_CASE("version 2 파일은 로드 거부(빈 목록) + 이후 save 거부") {
+TEST_CASE("version 3 파일은 로드 거부(빈 목록) + 이후 save 거부") {
     QTemporaryDir dir;
     REQUIRE(dir.isValid());
     const QString p = dir.path() + "/future.json";
     {
         QFile f(p); (void)f.open(QIODevice::WriteOnly);
-        f.write(R"({"version":2,"channels":[
+        f.write(R"({"version":3,"channels":[
             {"id":"ch1","name":"미래","url":"rtsp://future/s","gridIndex":0}
         ]})");
     }
@@ -142,16 +142,16 @@ TEST_CASE("version 2 파일은 로드 거부(빈 목록) + 이후 save 거부") 
     // 미래 버전 → 빈 목록 반환
     auto out = repo.load();
     CHECK(out.empty());
-    // save 거부 → 파일 내용 보존 (version=2 그대로여야 함)
+    // save 거부 → 파일 내용 보존 (version=3 그대로여야 함)
     std::vector<ChannelConfig> newData = {{"ch2", "새채널", "rtsp://new/s", 1}};
     CHECK_FALSE(repo.save(newData));
-    // 파일은 원본 v2 내용 그대로 보존돼야 함
+    // 파일은 원본 v3 내용 그대로 보존돼야 함
     {
         QFile f(p);
         REQUIRE(f.open(QIODevice::ReadOnly));
         const auto doc = QJsonDocument::fromJson(f.readAll());
         REQUIRE(doc.isObject());
-        CHECK(doc.object().value("version").toInt() == 2);
+        CHECK(doc.object().value("version").toInt() == 3);
     }
 }
 
@@ -202,4 +202,52 @@ TEST_CASE("version 키 누락 객체도 channels 있으면 로드") {
     auto out = repo.load();
     REQUIRE(out.size() == 1);
     CHECK(out[0].id == "ch1");
+}
+
+// ── M4: useRelay 필드 + relayUrlFor ────────────────────────────────────────
+
+TEST_CASE("useRelay 라운드트립: save→load 보존") {
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const std::string path = (dir.path() + "/relay.json").toStdString();
+
+    nv::infra::JsonChannelRepository repo(path);
+    std::vector<ChannelConfig> in = {
+        {"ch1", "릴레이채널", "rtsp://192.168.1.1:8900/live", 0, false, /*useRelay=*/true},
+        {"ch2", "직결채널",   "rtsp://192.168.1.2:8900/live", 1, false, /*useRelay=*/false},
+    };
+    REQUIRE(repo.save(in));
+
+    nv::infra::JsonChannelRepository repo2(path);
+    auto out = repo2.load();
+    REQUIRE(out.size() == 2);
+    CHECK(out[0].useRelay == true);
+    CHECK(out[1].useRelay == false);
+    CHECK(out[0] == in[0]);
+    CHECK(out[1] == in[1]);
+}
+
+TEST_CASE("구버전 JSON(useRelay 필드 없음) 로드 시 useRelay=false") {
+    QTemporaryDir dir;
+    const QString p = dir.path() + "/legacy_no_relay.json";
+    {
+        QFile f(p); (void)f.open(QIODevice::WriteOnly);
+        // useRelay 필드 없는 구버전 형식
+        f.write(R"([
+            {"id":"ch1","name":"레거시","url":"rtsp://legacy/s","gridIndex":0,"autoConnect":true}
+        ])");
+    }
+    nv::infra::JsonChannelRepository repo(p.toStdString());
+    auto out = repo.load();
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].useRelay == false);
+    CHECK(out[0].autoConnect == true);
+    CHECK(out[0].id == "ch1");
+}
+
+TEST_CASE("relayUrlFor: id로 127.0.0.1:8554 경로 파생") {
+    using nv::domain::relayUrlFor;
+    CHECK(relayUrlFor("ch1") == "rtsp://127.0.0.1:8554/ch1");
+    CHECK(relayUrlFor("camera-front") == "rtsp://127.0.0.1:8554/camera-front");
+    CHECK(relayUrlFor("") == "rtsp://127.0.0.1:8554/");
 }

@@ -23,6 +23,7 @@ static std::vector<ChannelConfig> parseArray(const QJsonArray& arr) {
         c.url = o.value("url").toString().toStdString();
         c.gridIndex = o.value("gridIndex").toInt(-1);
         c.autoConnect = o.value("autoConnect").toBool(false);
+        c.useRelay = o.value("useRelay").toBool(false);
         if (!c.id.empty()) out.push_back(std::move(c));
     }
     return out;
@@ -40,7 +41,7 @@ std::vector<ChannelConfig> JsonChannelRepository::load() {
     if (doc.isObject()) {
         const auto obj = doc.object();
         const int ver = obj.value("version").toInt(1);
-        if (ver > 1) {
+        if (ver > 2) {
             std::fprintf(stderr, "[JsonChannelRepository] 미래 버전(v%d) 파일 — 로드/저장 거부(데이터 보호)\n", ver);
             m_refuseSave = true;   // 이후 save()를 무동작으로 막아 덮어쓰기 방지
             return {};
@@ -62,10 +63,11 @@ bool JsonChannelRepository::save(const std::vector<ChannelConfig>& channels) {
         o["url"] = QString::fromStdString(c.url);
         o["gridIndex"] = c.gridIndex;
         o["autoConnect"] = c.autoConnect;
+        o["useRelay"] = c.useRelay;
         arr.append(o);
     }
     QJsonObject envelope;
-    envelope["version"] = 1;
+    envelope["version"] = 2;
     envelope["channels"] = arr;
     QSaveFile f(QString::fromStdString(m_path));   // 원자적 쓰기
     if (!f.open(QIODevice::WriteOnly)) return false;
