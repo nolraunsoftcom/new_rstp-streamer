@@ -38,3 +38,21 @@
 
 ## 도구
 `ops/m4-relay-verify.sh` — relay 활성 기능검증(보호막·재시작무중단·진단, teardown 포함).
+
+---
+
+## M4 코드 리뷰 대응 (2026-06-14)
+
+| # | 지적 | 처리 | 커밋 |
+|---|---|---|---|
+| 1 | FfmpegRecorder 미커밋 | stale — 이미 커밋됨(트리 클린) | `4098cea` |
+| 2 | auto.key/crt untracked, .gitignore 없음 | .gitignore에 `auto.*`/`*.key`/`*.crt` 추가 + 키 제거(과거 이력 없음 확인) | `1ad9e53` |
+| 3 | RelayConfig YAML 주입(이스케이프/runOn 차단 없음) | generate가 source를 YAML 이중따옴표 이스케이프(\,",제어문자 제거), validate가 runOn* 명령키 블록리스트 거부. **악성 URL 개행주입 차단 실증** | `27aaea4` |
+| 4 | pollHealth UI스레드 동기HTTP + ensureUp 블로킹 | RelayCoordinator(전용 QThread)로 ensureUp+폴링 이동, 헬스결과는 control 스레드로 마샬. UI 무블로킹. clean teardown(shutdown→quit→wait). **relay 워커스레드 실작동+clean exit 검증, 보호막 무회귀(churn close +0)** | `5c9d298` |
+| 5 | URL 검증 약함(startsWith만) | ChannelDialog: QUrl(StrictMode)+isValid+host 비어있지않음+제어문자 거부(레거시 패리티) | `27aaea4` |
+| 6 | 런타임 채널변경 relay 미반영 | RelayCoordinator.updateChannels 훅 배선(채널변경→config 재생성, ensureUp 멱등) | `5c9d298` |
+
+### 남은 Low(후속)
+- LaunchdRelayServiceIT teardown이 `/tmp/nv_launchd_it_relay.yml`·로그를 남김(테스트 위생). 제품 무관, IT 정리 보강 권장.
+- plist/sc 명령은 현재 입력이 전부 앱 상수(HOME·고정 label·cfgDir)라 안전 — 사용자 유래 입력 추가 시 XML/셸 이스케이프 필요. 불변량 주석 권장.
+- 콜드스타트 first-frame ~28s(relay 부팅 16s + viewer 재연결) — 실배포는 상시서비스라 즉시. 워커스레드화로 UI 블로킹은 제거됨.
