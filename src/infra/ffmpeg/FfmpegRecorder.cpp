@@ -8,6 +8,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavformat/avio.h>
 #include <libavutil/avutil.h>
+#include <libavutil/dict.h>
 }
 
 namespace nv::infra {
@@ -91,7 +92,11 @@ void FfmpegRecorder::writePacket(const AVPacket* pkt) {
             m_errored.store(true);
             return;
         }
-        rc = avformat_write_header(m_fmt, nullptr);
+        // B프레임 등으로 음수 dts가 생겨도 muxer가 0 기준으로 시프트하도록 명시(기본 auto 의존 제거).
+        AVDictionary* hopts = nullptr;
+        av_dict_set(&hopts, "avoid_negative_ts", "make_zero", 0);
+        rc = avformat_write_header(m_fmt, &hopts);
+        av_dict_free(&hopts);
         if (rc < 0) {
             std::fprintf(stderr, "[FfmpegRecorder] write_header 실패 (%d)\n", rc);
             avio_closep(&m_fmt->pb);

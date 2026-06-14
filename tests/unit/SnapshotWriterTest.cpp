@@ -62,6 +62,34 @@ TEST_CASE("PngSnapshotWriter: 유효 RGBA를 PNG로 저장(매직·비어있지 
     ::remove(out.c_str());
 }
 
+TEST_CASE("PngSnapshotWriter: 원자적 쓰기 — 최종 파일 존재, .tmp 파일 없음") {
+    const int w = 8, h = 8;
+    const auto px = solidRgba(w, h, 100, 150, 200);
+    const std::string out = tmpPng();
+    const std::string tmp = out + ".tmp";
+
+    // 이전 잔재 제거
+    ::remove(out.c_str());
+    ::remove(tmp.c_str());
+
+    REQUIRE(PngSnapshotWriter::write(out, w, h, px.data()));
+
+    // (a) 최종 경로가 존재하며 유효한 PNG
+    CHECK(isPng(out));
+    {
+        std::ifstream f(out, std::ios::binary | std::ios::ate);
+        CHECK(f.tellg() > 0);
+    }
+
+    // (b) .tmp 잔재 파일이 없어야 한다(rename 후 제거됨)
+    {
+        std::ifstream ftmp(tmp, std::ios::binary);
+        CHECK_FALSE(ftmp.good());
+    }
+
+    ::remove(out.c_str());
+}
+
 TEST_CASE("PngSnapshotWriter: 유효하지 않은 입력은 false") {
     const auto px = solidRgba(4, 4, 0, 0, 0);
     CHECK_FALSE(PngSnapshotWriter::write("/tmp/nv_should_not.png", 4, 4, nullptr));

@@ -19,8 +19,18 @@ bool PngSnapshotWriter::write(const std::string& path, int w, int h, const uint8
     // QImage::save()는 동기적으로 완료되고, view는 save() 반환 전까지 유효하다.
     const QImage view(rgbaTight, w, h, w * 4, QImage::Format_RGBA8888);
 
-    if (!view.save(QString::fromStdString(path), "PNG")) {
-        std::fprintf(stderr, "[PngSnapshotWriter] PNG 저장 실패: %s\n", path.c_str());
+    // 원자적 쓰기: temp 경로에 먼저 저장 후 최종 경로로 rename.
+    // FilePanel의 QFileSystemWatcher가 쓰는 중인 파일을 디코드해 나던
+    // libpng Read Error를 방지한다(완성된 파일만 노출).
+    const std::string tmp = path + ".tmp";
+    if (!view.save(QString::fromStdString(tmp), "PNG")) {
+        std::fprintf(stderr, "[PngSnapshotWriter] PNG 저장 실패: %s\n", tmp.c_str());
+        return false;
+    }
+    // 원자적 교체: watcher가 쓰는 중 파일을 디코드하지 않도록 temp→최종 rename(같은 FS, 원자적).
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
+        std::fprintf(stderr, "[PngSnapshotWriter] rename 실패: %s\n", path.c_str());
+        std::remove(tmp.c_str());
         return false;
     }
     return true;
