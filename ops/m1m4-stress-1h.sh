@@ -4,7 +4,7 @@
 # 단계: 지속 -> viewer churn(M4 보호막) -> 장애주입(relay 중단/재개 + 합성1개 kill/restore, M2 독립성/M1 복구) -> 마무리.
 # 핵심측정: viewer 껐다켜도 장비 close ~0(M4 멱등 보호막), 채널독립성, 녹화/스냅샷 무결성, 누수0/크래시0.
 set -uo pipefail
-ROOT=/Users/ieonsang/nolsoft/ziilab/new_viewer-m4
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/build/src/new_viewer.app/Contents/MacOS/new_viewer"
 FIX="$ROOT/tests/fixtures/h264.mkv"
 CFG="$HOME/Library/Preferences/영상관리시스템/channels.json"
