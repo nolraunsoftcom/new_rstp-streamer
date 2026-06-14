@@ -32,7 +32,9 @@
 - ❌ mediamtx 소스드롭 아님 — ffmpeg reader 연결/종료 테스트: reader 0이 돼도 mediamtx가 장비 소스 유지(bytesRecv 계속 증가, ready=True). `sourceOnDemand:no` 정상 동작.
 - ✅ **진짜 원인: `LaunchdRelayService::ensureRunning`이 비멱등** — viewer가 **매 기동마다** `ensureUp`→`ensureRunning` 호출, 그 안에서 **이미 떠있는 relay도 `launchctl bootout`(중단)→재시작**. relay 재시작 → 장비 재-풀 → 장비 close/reopen. **viewer 재시작 N회 = relay 재시작 N회 = 장비 close N회.**
 
-**수정안(확정):** `ensureRunning`을 진짜 멱등으로 — **이미 실행 중 + 설정(configPath) 동일이면 bootout/재시작 없이 즉시 return**. 미실행이거나 설정 변경 시에만 (재)기동. WindowsRelayService도 동일 적용. 수정 후 churn 시 장비 close ≈ 0이어야 보호막 입증.
+**수정안(확정):** `ensureRunning`을 진짜 멱등으로 — **이미 실행 중 + 설정(configPath) 동일이면 bootout/재시작 없이 즉시 return**. 미실행이거나 설정 변경 시에만 (재)기동. WindowsRelayService도 동일 적용.
+
+**✅ 수정 완료 + 재검증 통과 (`3191dfb`, 도구 `b86c28d`):** macOS/Windows 어댑터 멱등화. 재검증(viewer 6회 껐다키고): **relay PID 81169→81169 불변(재시작 안 함), 장비 소스파이프 close/reopen +0** (수정 전 +6=재시작과 1:1). hasSource 6/6 True 유지. **보호막 실작동 입증** — viewer를 아무리 재시작해도 장비 세션 무영향.
 
 ## 3. (저심각도) 콜드스타트 초기 stall
 첫 기동(콜드)에서 relay+장비풀 확립 전 수~수십초 stall→Connecting 반복 후 정착. 실배포는 relay 상시서비스라 콜드스타트 드묾. ensureUp 비동기화로 개선 가능(별도).
