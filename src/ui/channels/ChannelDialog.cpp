@@ -5,6 +5,7 @@
 #include <QFrame>
 #include <QLabel>
 #include <QLineEdit>
+#include <QUrl>
 #include "src/ui/common/Confirm.h"
 
 namespace nv::ui {
@@ -56,6 +57,15 @@ void ChannelDialog::accept() {
         !u.startsWith(QStringLiteral("rtsps://"), Qt::CaseInsensitive)) {
         warnBox(this, QStringLiteral("입력 오류"),
                 QStringLiteral("URL은 rtsp:// 또는 rtsps://로 시작해야 합니다."));
+        return;
+    }
+    // 레거시 수준 검증 + 주입 입구 차단: StrictMode 파싱, 유효성, 호스트 존재, 제어문자 거부.
+    const QUrl parsed(u, QUrl::StrictMode);
+    bool hasControl = false;
+    for (const QChar& ch : u) { if (ch.unicode() < 0x20) { hasControl = true; break; } }
+    if (!parsed.isValid() || parsed.host().isEmpty() || hasControl) {
+        warnBox(this, QStringLiteral("입력 오류"),
+                QStringLiteral("유효한 RTSP URL이 아닙니다 (호스트 누락/제어문자/형식 오류)."));
         return;
     }
     QDialog::accept();
