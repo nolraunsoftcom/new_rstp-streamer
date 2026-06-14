@@ -80,7 +80,31 @@ std::string RecordingController::makePath(const std::string& channelName) const 
 }
 
 void RecordingController::notify(const std::string& channelId, nv::domain::RecordingState s) {
+    // 세그먼트 마감 캡처: 활성 세그먼트(currentPath 존재)가 Idle로 전이하는 모든 경로
+    // (토글 stop·드롭·롤오버·디스크오류 수렴)에서 길이/경로를 기록한다. 옵저버 호출 전에
+    // 갱신하므로 같은 notify 안에서 옵저버가 lastSegment*를 안전하게 조회할 수 있다.
+    if (s == nv::domain::RecordingState::Idle) {
+        auto it = m_channels.find(channelId);
+        if (it != m_channels.end() && !it->second.currentPath.empty()) {
+            auto& ch = it->second;
+            const auto dur = std::chrono::duration_cast<std::chrono::seconds>(
+                m_clock.now() - ch.segmentStart);
+            ch.lastPath        = ch.currentPath;
+            ch.lastDurationSec = dur.count() < 0 ? 0 : static_cast<int>(dur.count());
+            ch.currentPath.clear();
+        }
+    }
     if (m_observer) m_observer(channelId, s);
+}
+
+std::string RecordingController::lastSegmentPath(const std::string& channelId) const {
+    auto it = m_channels.find(channelId);
+    return it != m_channels.end() ? it->second.lastPath : std::string{};
+}
+
+int RecordingController::lastSegmentDurationSec(const std::string& channelId) const {
+    auto it = m_channels.find(channelId);
+    return it != m_channels.end() ? it->second.lastDurationSec : 0;
 }
 
 void RecordingController::doStart(const std::string& channelId, const std::string& channelName) {
@@ -108,6 +132,7 @@ void RecordingController::doStart(const std::string& channelId, const std::strin
     auto& ch = m_channels[channelId];
     ch.channelName  = channelName;
     ch.segmentStart = m_clock.now();
+    ch.currentPath  = path;   // 토스트 메트릭: 활성 세그먼트 경로 기록(Idle 전이 시 캡처)
     ch.startFailures = 0;   // D2: 성공 시 백오프 카운터 리셋
     ch.retryStart = false;  // D1: 정상 녹화 중 — 재시도 게이트 해제
     // P4d: sink.isRecording이 이미 true(예: 테스트용 페이크)면 즉시 Recording,

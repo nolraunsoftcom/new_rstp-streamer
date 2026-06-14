@@ -1,11 +1,14 @@
 #include "MainWindow.h"
 #include <QApplication>
 #include <QButtonGroup>
+#include <QDesktopServices>
+#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QUrl>
 #include <QSet>
 #include <QStatusBar>
 #include <QTabBar>
@@ -25,6 +28,36 @@ static constexpr int kLeftPanelWidth = 200;
 static constexpr int kRightPanelWidth = 280;
 static constexpr int kPanelToggleWidth = 18;
 static constexpr int kHeaderHeight = 32;
+
+namespace {
+// 레거시(../viewer) formatToastDuration/formatToastBytes 미러 — 토스트 문구 동일성.
+QString formatToastDuration(int seconds)
+{
+    if (seconds < 0) seconds = 0;
+    const int h = seconds / 3600;
+    const int m = (seconds / 60) % 60;
+    const int s = seconds % 60;
+    if (h > 0) {
+        return QStringLiteral("%1:%2:%3")
+            .arg(h)
+            .arg(m, 2, 10, QLatin1Char('0'))
+            .arg(s, 2, 10, QLatin1Char('0'));
+    }
+    return QStringLiteral("%1:%2")
+        .arg(m, 2, 10, QLatin1Char('0'))
+        .arg(s, 2, 10, QLatin1Char('0'));
+}
+
+QString formatToastBytes(qint64 bytes)
+{
+    if (bytes < 1024) return QStringLiteral("%1 B").arg(bytes);
+    const double kib = bytes / 1024.0;
+    if (kib < 1024.0) return QStringLiteral("%1 KB").arg(kib, 0, 'f', 1);
+    const double mib = kib / 1024.0;
+    if (mib < 1024.0) return QStringLiteral("%1 MB").arg(mib, 0, 'f', 1);
+    return QStringLiteral("%1 GB").arg(mib / 1024.0, 0, 'f', 2);
+}
+} // namespace
 
 static const QString kTabStyle = QStringLiteral(
     "QTabWidget::pane { border: none; background-color: #f5f5f5; }"
@@ -386,45 +419,62 @@ void MainWindow::onRecordingState(QString channelId, nv::domain::RecordingState 
 
 void MainWindow::onSnapshotSaved(QString /*channelName*/, QString filePath)
 {
-    // 레거시: "스냅샷 저장됨" / detail = 파일명
+    // 레거시: "스냅샷 저장됨" / detail = 파일명 / 액션 [폴더][열기]
     const QString fileName = filePath.section(QLatin1Char('/'), -1);
+    const QString path = filePath;
     Toast::show(centralWidget(),
                 QStringLiteral("스냅샷 저장됨"),
                 fileName,
                 Toast::Level::Info,
-                3500);
+                3500,
+                {{QStringLiteral("폴더"), [path]() {
+                      QDesktopServices::openUrl(
+                          QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+                  }},
+                 {QStringLiteral("열기"), [path]() {
+                      QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+                  }}});
 }
 
-void MainWindow::onRecordingSaved(QString channelName, QString /*filePath*/,
+void MainWindow::onRecordingSaved(QString channelName, QString filePath,
                                   bool autoSaved, qint64 bytes, int durationSec)
 {
     // 레거시: "녹화 자동 저장됨" or "녹화 저장됨"
-    // detail: "채널명 · 0m 00s · 0.0 MB"
-    const int minutes = durationSec / 60;
-    const int secs    = durationSec % 60;
-    const double mb   = bytes / (1024.0 * 1024.0);
-    const QString detail = QStringLiteral("%1 \xc2\xb7 %2m %3s \xc2\xb7 %4 MB")
-        .arg(channelName)
-        .arg(minutes)
-        .arg(secs, 2, 10, QLatin1Char('0'))
-        .arg(mb, 0, 'f', 1);
+    // detail: "채널명 · 0:00 · 0.0 KB" (formatToastDuration/Bytes 미러) / 액션 [폴더][재생]
+    // bytes: stopRecording이 비동기라 옵저버 시점엔 파일 미마감 → UI 슬롯(큐 이후)에서
+    //        실제 파일 크기를 stat한다. 경로가 비면 전달된 bytes를 사용(폴백).
+    const qint64 actualBytes = filePath.isEmpty() ? bytes : QFileInfo(filePath).size();
+    const QString detail = QStringLiteral("%1 · %2 · %3")
+        .arg(channelName, formatToastDuration(durationSec), formatToastBytes(actualBytes));
+    const QString path = filePath;
     Toast::show(centralWidget(),
                 autoSaved ? QStringLiteral("녹화 자동 저장됨")
                           : QStringLiteral("녹화 저장됨"),
                 detail,
                 autoSaved ? Toast::Level::Warn : Toast::Level::Info,
-                5000);
+                5000,
+                {{QStringLiteral("폴더"), [path]() {
+                      QDesktopServices::openUrl(
+                          QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+                  }},
+                 {QStringLiteral("재생"), [path]() {
+                      QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+                  }}});
 }
 
 void MainWindow::onRecordingFailed(QString channelName, QString reason)
 {
-    // 레거시: "녹화 실패" / detail = "채널명 · 사유"
-    const QString detail = QStringLiteral("%1 \xc2\xb7 %2").arg(channelName, reason);
+    // 레거시: "녹화 실패" / detail = "채널명 · 사유" / 액션 [로그 보기]
+    const QString detail = QStringLiteral("%1 · %2").arg(channelName, reason);
     Toast::show(centralWidget(),
                 QStringLiteral("녹화 실패"),
                 detail,
                 Toast::Level::Error,
-                9000);
+                9000,
+                {{QStringLiteral("로그 보기"), [this]() {
+                      setRightPanelVisible(true);
+                      if (m_rightTabs) m_rightTabs->setCurrentIndex(2);  // ③ 로그 탭
+                  }}});
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)

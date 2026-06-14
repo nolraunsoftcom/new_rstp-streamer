@@ -32,7 +32,8 @@ Toast* Toast::show(QWidget* parent,
                    const QString& title,
                    const QString& detail,
                    Level /*level*/,
-                   int timeoutMs)
+                   int timeoutMs,
+                   const QList<Action>& actions)
 {
     // 이전 토스트 교체 (레거시 단일 인스턴스 보장)
     if (!s_current.isNull()) {
@@ -72,7 +73,7 @@ Toast* Toast::show(QWidget* parent,
     titleLabel->setTextInteractionFlags(Qt::NoTextInteraction);
     headerRow->addWidget(titleLabel, 1);
 
-    auto* closeBtn = new QPushButton(QStringLiteral("\xc3\x97"), toast);  // UTF-8 × (U+00D7)
+    auto* closeBtn = new QPushButton(QStringLiteral("×"), toast);  // U+00D7 곱셈기호
     closeBtn->setFixedSize(22, 22);
     closeBtn->setCursor(Qt::PointingHandCursor);
     closeBtn->setStyleSheet(QStringLiteral(
@@ -90,6 +91,25 @@ Toast* Toast::show(QWidget* parent,
         detailLabel->setStyleSheet(QStringLiteral("color: #555; font-size: 12px;"));
         detailLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
         layout->addWidget(detailLabel);
+    }
+
+    // ── 액션 버튼 행 (우하단 정렬) ───────────────────────────────────────
+    if (!actions.isEmpty()) {
+        auto* buttonRow = new QHBoxLayout();
+        buttonRow->setContentsMargins(0, 3, 0, 0);
+        buttonRow->addStretch();
+        for (const Action& a : actions) {
+            if (a.label.isEmpty()) continue;
+            auto* button = new QPushButton(a.label, toast);
+            button->setCursor(Qt::PointingHandCursor);
+            const std::function<void()> cb = a.callback;
+            QObject::connect(button, &QPushButton::clicked, toast, [cb, closeToast]() {
+                if (cb) cb();
+                closeToast();
+            });
+            buttonRow->addWidget(button);
+        }
+        layout->addLayout(buttonRow);
     }
 
     toast->adjustSize();

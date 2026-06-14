@@ -325,13 +325,18 @@ int main(int argc, char** argv) {
                     for (const auto& c : mgr.configs()) {
                         if (c.id == id) { name = c.name; break; }
                     }
+                    // 메트릭: 컨트롤러가 notify(Idle)에서 캡처한 직전 세그먼트 경로/길이.
+                    // bytes는 stopRecording이 비동기(디코드 스레드가 다음 패킷에서 파일 마감)라
+                    // 여기서 stat하면 너무 이르다 → UI 슬롯(큐 이후)에서 파일 크기를 읽는다.
+                    const std::string recPath = recCtrl.lastSegmentPath(id);
+                    const int recDur = recCtrl.lastSegmentDurationSec(id);
                     QMetaObject::invokeMethod(winPtr, "onRecordingSaved",
                         Qt::QueuedConnection,
                         Q_ARG(QString, QString::fromStdString(name)),
-                        Q_ARG(QString, QString{}),   // 경로: 옵저버에 미포함 — 생략
+                        Q_ARG(QString, QString::fromStdString(recPath)),
                         Q_ARG(bool, false),          // autoSaved: 롤오버 구분 불가 — false
-                        Q_ARG(qint64, 0),            // bytes: 옵저버에 미포함 — 0
-                        Q_ARG(int, 0));              // duration: 옵저버에 미포함 — 0
+                        Q_ARG(qint64, 0),            // bytes: UI에서 파일 stat으로 산출
+                        Q_ARG(int, recDur));
                 } else if (state == nv::domain::RecordingState::Idle
                            && prev == nv::domain::RecordingState::Idle
                            && recCtrl.stateOf(id) == nv::domain::RecordingState::Idle) {

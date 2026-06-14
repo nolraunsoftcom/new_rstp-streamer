@@ -46,6 +46,12 @@ public:
 
     nv::domain::RecordingState stateOf(const std::string& channelId) const;
 
+    // 직전에 마감된 세그먼트의 파일 경로(없으면 빈 문자열). Recording→Idle 전이 시점에
+    // notify() 내부에서 갱신된다 — 옵저버가 같은 호출에서 안전하게 조회할 수 있다.
+    std::string lastSegmentPath(const std::string& channelId) const;
+    // 직전에 마감된 세그먼트의 길이(초). 시작~중지 시각차(IClock 기준). 없으면 0.
+    int lastSegmentDurationSec(const std::string& channelId) const;
+
     // UI 표시용 옵저버 — 상태 변화 시 호출된다.
     void setObserver(RecordingObserver observer);
 
@@ -55,6 +61,9 @@ private:
         bool armed{false};                                  // 사용자 녹화 의도(끊김에도 유지)
         std::string channelName;                            // 롤오버 시 재사용
         std::chrono::steady_clock::time_point segmentStart; // 현재 세그먼트 시작 시각
+        std::string currentPath;                            // 활성 세그먼트 파일 경로(doStart에서 설정, Idle 캡처 후 비움)
+        std::string lastPath;                               // 직전 마감 세그먼트 경로(토스트 표시용)
+        int lastDurationSec{0};                             // 직전 마감 세그먼트 길이(초)
         // D2 백오프: doStart 연속 실패 횟수. kMaxStartFailures 도달 시 armed를 내려
         // 무한 재시도·로그 스팸을 막는다. doStart 성공 시 0으로 리셋.
         unsigned startFailures{0};
