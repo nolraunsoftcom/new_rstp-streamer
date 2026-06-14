@@ -49,6 +49,7 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Test Network)
 add_executable(nv_ui_tests
   unit/VideoTileWidgetTest.cpp
   unit/ControlBridgeTest.cpp
+  unit/ToastTest.cpp
 )
 target_include_directories(nv_ui_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(nv_ui_tests PRIVATE nv_ui Catch2::Catch2WithMain Qt6::Widgets Qt6::Test)

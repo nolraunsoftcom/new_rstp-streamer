@@ -146,13 +146,20 @@ int main(int argc, char** argv) {
                 if (c.id == id) { name = c.name; break; }
             }
             const std::string path = nv::infra::RecordingPaths::snapshotPath(name);
-            snapSvc.capture(id, name, path);
+            const bool ok = snapSvc.capture(id, name, path);
             // 스냅샷 후 파일 패널 갱신 (queued — UI 스레드)
             if (winPtr != nullptr) {
                 QMetaObject::invokeMethod(winPtr, "onRecordingState",
                     Qt::QueuedConnection,
                     Q_ARG(QString, QString::fromStdString(id)),
                     Q_ARG(bool, recCtrl.stateOf(id) == nv::domain::RecordingState::Recording));
+                // P3: 스냅샷 저장 토스트 (성공 시만)
+                if (ok) {
+                    QMetaObject::invokeMethod(winPtr, "onSnapshotSaved",
+                        Qt::QueuedConnection,
+                        Q_ARG(QString, QString::fromStdString(name)),
+                        Q_ARG(QString, QString::fromStdString(path)));
+                }
             }
         });
     };
@@ -288,13 +295,58 @@ int main(int argc, char** argv) {
             bridge.publish(QString::fromStdString(id), s);
         });
         // M3-5: RecordingController 옵저버 — 상태 변화 시 UI 스레드로 queued 전달
-        recCtrl.setObserver([&](const std::string& id, nv::domain::RecordingState state) {
+        // P3: Recording→Idle 전이 감지로 녹화 저장/실패 토스트 트리거
+        // prevRecState: control 스레드 단일 호출이므로 mutex 불필요.
+        auto prevRecState = std::make_shared<std::map<std::string, nv::domain::RecordingState>>();
+        recCtrl.setObserver([&, prevRecState](const std::string& id, nv::domain::RecordingState state) {
             const bool rec = (state == nv::domain::RecordingState::Recording);
             if (winPtr != nullptr) {
                 QMetaObject::invokeMethod(winPtr, "onRecordingState",
                     Qt::QueuedConnection,
                     Q_ARG(QString, QString::fromStdString(id)),
                     Q_ARG(bool, rec));
+
+                // P3: 전이 감지
+                const auto prev = [&]() -> nv::domain::RecordingState {
+                    auto it = prevRecState->find(id);
+                    return it != prevRecState->end()
+                        ? it->second
+                        : nv::domain::RecordingState::Idle;
+                }();
+
+                if (state == nv::domain::RecordingState::Idle
+                    && prev == nv::domain::RecordingState::Recording) {
+                    // Recording → Idle: 녹화 정상 저장됨
+                    // 채널명은 control 스레드(mgr.configs() 안전) 여기서 조회
+                    std::string name;
+                    for (const auto& c : mgr.configs()) {
+                        if (c.id == id) { name = c.name; break; }
+                    }
+                    QMetaObject::invokeMethod(winPtr, "onRecordingSaved",
+                        Qt::QueuedConnection,
+                        Q_ARG(QString, QString::fromStdString(name)),
+                        Q_ARG(QString, QString{}),   // 경로: 옵저버에 미포함 — 생략
+                        Q_ARG(bool, false),          // autoSaved: 롤오버 구분 불가 — false
+                        Q_ARG(qint64, 0),            // bytes: 옵저버에 미포함 — 0
+                        Q_ARG(int, 0));              // duration: 옵저버에 미포함 — 0
+                } else if (state == nv::domain::RecordingState::Idle
+                           && prev == nv::domain::RecordingState::Idle
+                           && recCtrl.stateOf(id) == nv::domain::RecordingState::Idle) {
+                    // Idle → Idle: doStart 실패 경로 (녹화 실패)
+                    // armed 상태는 공개 API로 확인 불가 — stateOf만 사용 가능.
+                    // 단, 이 경로는 doStart 실패(ok==false) 시에만 발생한다.
+                    // prev==Idle && cur==Idle 전이는 오직 doStart-fail notify뿐이므로 안전.
+                    std::string name;
+                    for (const auto& c : mgr.configs()) {
+                        if (c.id == id) { name = c.name; break; }
+                    }
+                    QMetaObject::invokeMethod(winPtr, "onRecordingFailed",
+                        Qt::QueuedConnection,
+                        Q_ARG(QString, QString::fromStdString(name)),
+                        Q_ARG(QString, QStringLiteral("녹화 시작 실패")));
+                }
+
+                (*prevRecState)[id] = state;
             }
         });
     });

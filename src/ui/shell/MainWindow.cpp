@@ -5,6 +5,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSet>
 #include <QStatusBar>
 #include <QTabBar>
@@ -16,6 +17,7 @@
 #include "src/ui/grid/GridView.h"
 #include "src/ui/shell/LogPanel.h"
 #include "src/ui/panels/FilePanel.h"
+#include "src/ui/shell/Toast.h"
 
 namespace nv::ui {
 
@@ -376,6 +378,60 @@ void MainWindow::onRecordingState(QString channelId, bool recording)
     if (!recording && m_filePanel) {
         m_filePanel->refresh();
     }
+}
+
+
+// ── P3: 토스트 알림 슬롯 ──────────────────────────────────────────────────────
+// control→UI queued 호출; 기존 이벤트 흐름만 사용, 백엔드 불변.
+
+void MainWindow::onSnapshotSaved(QString /*channelName*/, QString filePath)
+{
+    // 레거시: "스냅샷 저장됨" / detail = 파일명
+    const QString fileName = filePath.section(QLatin1Char('/'), -1);
+    Toast::show(centralWidget(),
+                QStringLiteral("스냅샷 저장됨"),
+                fileName,
+                Toast::Level::Info,
+                3500);
+}
+
+void MainWindow::onRecordingSaved(QString channelName, QString /*filePath*/,
+                                  bool autoSaved, qint64 bytes, int durationSec)
+{
+    // 레거시: "녹화 자동 저장됨" or "녹화 저장됨"
+    // detail: "채널명 · 0m 00s · 0.0 MB"
+    const int minutes = durationSec / 60;
+    const int secs    = durationSec % 60;
+    const double mb   = bytes / (1024.0 * 1024.0);
+    const QString detail = QStringLiteral("%1 \xc2\xb7 %2m %3s \xc2\xb7 %4 MB")
+        .arg(channelName)
+        .arg(minutes)
+        .arg(secs, 2, 10, QLatin1Char('0'))
+        .arg(mb, 0, 'f', 1);
+    Toast::show(centralWidget(),
+                autoSaved ? QStringLiteral("녹화 자동 저장됨")
+                          : QStringLiteral("녹화 저장됨"),
+                detail,
+                autoSaved ? Toast::Level::Warn : Toast::Level::Info,
+                5000);
+}
+
+void MainWindow::onRecordingFailed(QString channelName, QString reason)
+{
+    // 레거시: "녹화 실패" / detail = "채널명 · 사유"
+    const QString detail = QStringLiteral("%1 \xc2\xb7 %2").arg(channelName, reason);
+    Toast::show(centralWidget(),
+                QStringLiteral("녹화 실패"),
+                detail,
+                Toast::Level::Error,
+                9000);
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    // 창 크기 변경 시 토스트 위치 재조정 (레거시 positionToast 미러)
+    Toast::reposition(centralWidget());
 }
 
 } // namespace nv::ui
