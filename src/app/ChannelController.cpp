@@ -177,6 +177,9 @@ void ChannelController::onRelayHealth(bool deviceLegUp, DiagnosisReason reasonIf
 
 void ChannelController::onSourceError(DiagnosisReason reason) {
     if (!m_sourceAlive) return;
+    // #1: relay 모드에서 연결 자체가 거부/도달불가면 장비가 아니라 로컬 relay가 죽은 것 → RelayDown.
+    if (m_useRelay && reason == DiagnosisReason::DeviceUnreachable)
+        reason = DiagnosisReason::RelayDown;
     const auto stage = (m_sm.state() == ConnState::Streaming) ? HealthStage::PacketFlow
                                                               : HealthStage::RtspSession;
     apply(m_sm.errorOccurred(reason, m_clock.now()));

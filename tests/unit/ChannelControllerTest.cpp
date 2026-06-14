@@ -159,6 +159,30 @@ TEST_CASE("직결 모드: onRelayHealth 무동작, RelayIntake=NotApplicable 유
     CHECK(f.ctrl.health().stageState(HealthStage::RelayIntake) == StageState::NotApplicable);
 }
 
+// ────────────────────────────────────────────
+// #1: relay 모드 DeviceUnreachable → RelayDown 재매핑
+// ────────────────────────────────────────────
+
+TEST_CASE("relay 모드: onSourceError(DeviceUnreachable) → 진단 RelayDown으로 표기") {
+    RelayFixture f;
+    f.ctrl.connect();
+    auto* l = f.source.listener();
+    REQUIRE(l != nullptr);
+    l->onSourceError(DiagnosisReason::DeviceUnreachable);
+    // relay 모드에서 DeviceUnreachable은 로컬 relay 다운을 의미하므로 RelayDown으로 재매핑돼야 한다.
+    CHECK(f.ctrl.health().failedReason() == DiagnosisReason::RelayDown);
+}
+
+TEST_CASE("직결 모드: onSourceError(DeviceUnreachable) → DeviceUnreachable 유지") {
+    Fixture f;  // useRelay=false (직결 모드)
+    f.ctrl.connect();
+    auto* l = f.source.listener();
+    REQUIRE(l != nullptr);
+    l->onSourceError(DiagnosisReason::DeviceUnreachable);
+    // 직결 모드에서는 재매핑 없이 원래 사유가 그대로 기록돼야 한다.
+    CHECK(f.ctrl.health().failedReason() == DiagnosisReason::DeviceUnreachable);
+}
+
 TEST_CASE("D1: Failed 후 notifySourceAvailable → 즉시 재오픈 (relay 헬스 부활 경로)") {
     Fixture f;
     f.ctrl.connect();
