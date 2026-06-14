@@ -5,6 +5,7 @@
 #include <QSocketNotifier>
 #include <QStandardPaths>
 #include <QStyleHints>
+#include <QThread>
 #include <QTimer>
 #include <atomic>
 #include <chrono>
@@ -36,6 +37,7 @@
 #include "src/infra/video/VtMetalBridge.h"  // M2c Task2 컴파일/링크 확인용(호출은 Task3). 헤더만 참조.
 #include "src/ui/channels/ChannelListPanel.h"
 #include "src/ui/grid/GridView.h"
+#include "src/ui/relay/RelayCoordinator.h"
 #include "src/ui/shell/ControlBridge.h"
 #include "src/ui/shell/RepaintClock.h"
 #include "src/ui/shell/LogPanel.h"
@@ -205,6 +207,10 @@ int main(int argc, char** argv) {
     QObject::connect(&bridge, &nv::ui::ControlBridge::snapshotChanged,
                      &win, &nv::ui::MainWindow::onSnapshot);
 
+    // #6: 런타임 채널변경을 relay 워커에 반영하기 위한 코디네이터 포인터(아래 relay 블록에서 설정).
+    // pushList가 control 스레드에서 호출되므로 여기서 relay 채널을 재계산해 워커 스레드로 마샬한다.
+    std::atomic<nv::ui::RelayCoordinator*> coordPtr{nullptr};
+
     auto pushList = [&] {
         const auto cfgs = mgr.configs();
         QVector<QString> ids, names, urls;
@@ -223,6 +229,16 @@ int main(int argc, char** argv) {
                                   Q_ARG(QVector<QString>, urls),
                                   Q_ARG(QVector<int>, gi),
                                   Q_ARG(QVector<bool>, ac));
+        // #6: relay 모드 채널 목록을 워커 스레드(RelayCoordinator)로 마샬 → config 재생성(멱등).
+        if (auto* coord = coordPtr.load()) {
+            std::vector<nv::domain::RelayPath> relayCh;
+            for (const auto& c : cfgs)
+                if (c.useRelay)
+                    relayCh.push_back({c.id, c.url, true});
+            QMetaObject::invokeMethod(coord, [coord, relayCh = std::move(relayCh)]() mutable {
+                coord->updateChannels(std::move(relayCh));
+            }, Qt::QueuedConnection);
+        }
     };
 
     // M3-6: 녹화 생존 배선 — 채널 상태 전이 경계에서 RecordingController를 구동한다.
@@ -413,34 +429,42 @@ int main(int argc, char** argv) {
     auto relaySvc = nv::infra::makeRelayServiceManager();
     std::optional<nv::app::RelaySupervisor> relaySup;  // 플랫폼 지원 시만 생성
 
+    // relay 워커 스레드 — ensureUp(launchctl ~10s)과 헬스폴링(QEventLoop HTTP 2s)을 UI 스레드에서
+    // 분리한다. teardown(exec() 반환 후)에서 reach 가능하도록 outer 스코프에 선언.
+    QThread relayThread;
+    nv::ui::RelayCoordinator* relayCoord = nullptr;
+
     if (!relayChannels.empty() && relaySvc) {
         relaySup.emplace(*relaySvc, relayApi, logger, relayWriter.asCallback());
 
         const std::string relayCfgPath =
             (cfgDir + QStringLiteral("/mediamtx.yml")).toStdString();
 
-        // ① 설정 생성 ② 검증 ③ 기록 ④ 서비스 기동 — startup-only, 멱등.
-        // 실패(검증 오류/서비스 기동 불가)는 ensureUp 내부에서 logger에 기록하고 false 반환.
-        // viewer는 계속 실행(relay 없이 직결 폴백은 없으나 채널은 연결 시도함).
-        relaySup->ensureUp(relayChannels, relayCfgPath);
-
-        // 헬스 폴링: 3초마다 main 스레드 QTimer → control 스레드 executor.post
-        // QEventLoop 기반 동기 HTTP 호출이므로 Qt event loop가 있는 main 스레드에서 pollHealth.
-        auto* relayTimer = new QTimer(&app);
-        relayTimer->setInterval(3000);
-        QObject::connect(relayTimer, &QTimer::timeout, [&] {
-            auto health = relaySup->pollHealth(relayChannels);   // main 스레드 (QEventLoop ok)
-            executor.post([health, &mgr] {                        // control 스레드로 마샬
-                for (const auto& [id, h] : health) {
-                    if (auto* c = mgr.controller(id))
-                        c->onRelayHealth(h.up, h.reason);
-                }
+        // RelayCoordinator: 전용 워커 스레드에서 ensureUp 1회 + 3초 헬스폴링을 돌린다.
+        // 헬스 결과는 콜백으로 받아 control 스레드(executor)로 마샬 → ChannelController::onRelayHealth.
+        // RelaySupervisor는 Qt thread-affinity가 없고 이제 코디네이터만 호출하므로 워커 스레드에서
+        // 호출해도 안전하다.
+        relayCoord = new nv::ui::RelayCoordinator(
+            *relaySup, relayChannels, relayCfgPath, 3000,
+            [&](std::map<std::string, nv::app::RelayChannelHealth> health) {
+                executor.post([health = std::move(health), &mgr] {
+                    for (const auto& [id, h] : health) {
+                        if (auto* c = mgr.controller(id))
+                            c->onRelayHealth(h.up, h.reason);
+                    }
+                });
             });
-        });
-        relayTimer->start();
+        relayCoord->moveToThread(&relayThread);
+        // start()는 워커 스레드 이벤트루프에서 실행돼야 QTimer가 워커 스레드 affinity를 가진다.
+        QObject::connect(&relayThread, &QThread::started,
+                         relayCoord, &nv::ui::RelayCoordinator::start);
+        relayThread.start();
+
+        // #6: pushList(control 스레드)가 런타임 채널변경을 워커로 마샬하도록 코디네이터 노출.
+        coordPtr.store(relayCoord);
     }
     // relay 블록 끝 — relay 채널 없거나 relaySvc==null이면 위 블록 전체 건너뜀,
-    // 앱은 기존 직결 동작 그대로.
+    // 앱은 기존 직결 동작 그대로. relayThread는 시작 안 됨(teardown wait/quit는 no-op).
 
     // --- 소크 통계 (60초마다 RSS + 표시 fps 기록 — 4컬럼) ---
     const QString logsDir = cfgDir + QStringLiteral("/logs");
@@ -450,6 +474,20 @@ int main(int argc, char** argv) {
 
     const int rc = QApplication::exec();
     // Fix 4: 명시적 teardown — 콜백 해제 → 채널 정리 → 큐 비움 (스택 수명 의존 제거)
+
+    // relay 워커 clean shutdown: relaySup/relayApi/relaySvc(스택)가 파괴되기 전에 워커 스레드를
+    // 멈춘다. ① coordPtr 해제(pushList가 더는 마샬 못 함) ② shutdown()을 워커 스레드에서 동기
+    // 실행(BlockingQueuedConnection)해 폴타이머 중지 ③ quit+wait로 이벤트루프 종료 → poll()이
+    // relaySup 파괴 후 도는 use-after-free를 막는다. relayThread 미시작이면 isRunning()=false라
+    // 전부 건너뜀.
+    coordPtr.store(nullptr);
+    if (relayThread.isRunning()) {
+        QMetaObject::invokeMethod(relayCoord, "shutdown", Qt::BlockingQueuedConnection);
+        relayThread.quit();
+        relayThread.wait();
+    }
+    delete relayCoord;   // 스레드 정지 후 안전하게 파괴(미생성 시 nullptr → no-op)
+
     recCtrlPtr.store(nullptr);    // tick 람다가 dangling recCtrl을 보지 않도록 drain 전에 해제
     executor.post([&] {
         mgr.setSnapshotObserver(nullptr);

@@ -92,6 +92,7 @@ add_library(nv_ui STATIC
   ui/channels/ChannelListPanel.cpp
   ui/shell/LogPanel.cpp
   ui/panels/FilePanel.cpp
+  ui/relay/RelayCoordinator.cpp
   ui/shell/ControlBridge.h
   ui/shell/RepaintClock.h
   ${CMAKE_SOURCE_DIR}/resources/resources.qrc
