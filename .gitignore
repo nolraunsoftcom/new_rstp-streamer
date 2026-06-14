@@ -6,3 +6,9 @@ compile_commands.json
 .omc/
 tests/fixtures/*.mkv
 ops/mediamtx/mediamtx
+
+# mediamtx 자동생성 TLS (테스트/런타임) — 절대 커밋 금지
+auto.crt
+auto.key
+*.key
+*.crt
