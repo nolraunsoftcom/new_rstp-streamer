@@ -70,6 +70,34 @@ bool WindowsRelayService::startViaSchtasks(const std::string& configPath, std::s
 }
 
 bool WindowsRelayService::ensureRunning(const std::string& configPath) {
+    // 멱등: 이미 같은 설정으로 실행 중이면 재시작하지 않는다. viewer가 매 기동마다 ensureUp→
+    // 이 함수를 호출하는데, 실행 중인 relay를 재등록하면 장비 RTSP 세션이 매번 churn돼
+    // 보호막이 무효화된다(1h 스트레스에서 viewer재시작 N회=장비close N회로 발견).
+    // SCM 서비스 경로(sc qc)에서 configPath와 m_exe를 확인한다.
+    {
+        std::string qcOut;
+        int qcrc = runSc("qc \"" + m_svcName + "\"", &qcOut);
+        if (qcrc == 0 &&
+            qcOut.find(configPath) != std::string::npos &&
+            qcOut.find(m_exe) != std::string::npos &&
+            status().running) {
+            return true;   // 이미 동일 설정으로 가동 중 — 재시작 금지
+        }
+        // schtasks 폴백 경로: schtasks /query /v /tn 으로 TR(Task to Run) 확인
+        if (qcrc != 0) {
+            std::string stOut;
+            int strc = runCapture(
+                "schtasks /query /tn \"" + m_svcName + "\" /v /fo list 2>NUL",
+                &stOut);
+            if (strc == 0 &&
+                stOut.find(configPath) != std::string::npos &&
+                stOut.find(m_exe) != std::string::npos &&
+                status().running) {
+                return true;   // schtasks 폴백도 동일 설정으로 가동 중 — 재시작 금지
+            }
+        }
+    }
+
     // 1) 이미 서비스가 설치됐는지 확인
     std::string queryOut;
     int qrc = runSc("query \"" + m_svcName + "\"", &queryOut);

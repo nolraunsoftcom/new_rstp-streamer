@@ -57,6 +57,22 @@ bool LaunchdRelayService::ensureRunning(const std::string& configPath) {
     const std::string plist = plistPath();
     const std::string dir   = launchAgentsDir();
 
+    // 멱등: 이미 같은 설정으로 실행 중이면 재시작하지 않는다. viewer가 매 기동마다 ensureUp→
+    // 이 함수를 호출하는데, 실행 중인 relay를 bootout→재시작하면 장비 RTSP 세션이 매번
+    // close/reopen 돼 보호막이 무효화된다(1h 스트레스에서 viewer재시작 N회=장비close N회로 발견).
+    {
+        std::ifstream cur(plist);
+        if (cur.is_open()) {
+            std::stringstream ss; ss << cur.rdbuf();
+            const std::string content = ss.str();
+            if (content.find(configPath) != std::string::npos &&
+                content.find(m_bin) != std::string::npos &&
+                status().running) {
+                return true;   // 이미 동일 설정으로 가동 중 — 재시작 금지
+            }
+        }
+    }
+
     // 1) LaunchAgents 디렉토리 생성 (없으면)
     runSilent("mkdir -p \"" + dir + "\"");
 
