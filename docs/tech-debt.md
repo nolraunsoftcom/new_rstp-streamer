@@ -93,3 +93,27 @@
 | 31 | 스냅샷 PNG 비원자적 쓰기 → libpng Read Error | `PngSnapshotWriter::write`가 최종 경로에 직접 저장 → `FilePanel` `QFileSystemWatcher`가 쓰는 중 파일을 디코드해 `libpng error: Read Error`(1h 3회 관찰). 크래시 없이 텍스트 아이콘 폴백이라 무해. temp 파일 쓰기 후 `rename`(원자적 교체)으로 watcher가 완성 파일만 보게 하면 해소 | 정리 라운드 |
 | 32 | 통합테스트 병렬 플래키(포트 경합) | MediaMTX 통합테스트들이 동일 포트(8554 등) 공유 → `ctest -j` 병렬 시 간헐 실패(#168 TEARDOWN). 직렬은 12/12 통과. CTest `RESOURCE_LOCK` 또는 테스트별 랜덤 포트로 직렬화 | CI 도입 시(#3과 묶음) |
 | 33 | `device-battery.sh` RSS 샘플러 깨짐 | 2035 run의 `rss.log`가 `rss_mb=1` 고정 — `diskfull-test.sh`의 `pgrep -x new_viewer` 수정이 `device-battery.sh`엔 미반영. 실 RSS는 앱 `soak.csv`(209~245MB 평탄)로 확인되어 데이터 손실 없음. 스크립트 일관성 차원 수정 | 정리 라운드 |
+
+## 정리 라운드 (2026-06-14, tech-debt-cleanup 브랜치)
+
+부채 전수 트리아지 후 **적합한 것만** 처리(오버엔지니어링 회피).
+
+### 해소
+| # | 처리 | 커밋 |
+|---|---|---|
+| 31 | 스냅샷 원자적 쓰기 — `PngSnapshotWriter`가 temp 저장 후 `std::rename`(완성 파일만 watcher 노출) → libpng Read Error 제거 | `a8facd8` |
+| 28 | 녹화 `avoid_negative_ts=make_zero` 명시 — B프레임 음수 dts를 muxer 기본(auto) 의존 없이 0 시프트 | `a8facd8` |
+| 33 | **이미 해소(장부 오기)** — `device-battery.sh`는 이미 `pgrep -x new_viewer` 사용 중(이전 수정 main 머지됨). 병렬세션이 옛 run(2035) 기준으로 기록 | (기존) |
+| 27 | **이미 해소(#30 정정 확정)** — `RecordingController::tick`은 main.cpp에 배선됨(`r->tick()`), 배터리·1h·8h 소크에서 600s 롤오버 실증 | (기존) |
+
+### 보류 (사유 — 지금 처리 부적합/오버엔지니어링)
+| # | 항목 | 보류 사유 |
+|---|---|---|
+| 3, 26, 32 | 통합테스트 고정sleep/GOP/포트경합 flaky | **CI 도입 시** — 현재 `-j1` 직렬로 안정 통과, CI 없이는 가치 없음 |
+| 16 | 32ch 성능 미측정 | 별도 부하생성 환경 필요. 20ch 스케일은 검증됨 |
+| 17 | GPU framePainted 가시성 의존 | 회귀 아님(구 SW와 동일 특성), 실해 없음 |
+| 18/25 | 저장/녹화 실패 명시 알림(토스트/상태바) | **UI 작업** — `2026-06-13-m3-ui-parity-plan`과 묶임. 중복 회피, UI 라운드로 |
+| 19 | placeholder 풀 미축소 | 경미(유한), 기능 영향 없음 |
+| 24 | 순차 다채널 종료 누적 지연 | 실장비 wedge 발생 시 재검토(현재 미발생) |
+| 25 | 디스크 용량관리(회전/상한) | D10 백오프가 풀-디스크 안전 처리. 사전관리/회전은 큰 작업 → 운영 요구 시 |
+| 29 | Stopping enum/sanitizeName 중복 | 순수 미관·기능가치 0 → 오버엔지니어링 회피, 보류 |
