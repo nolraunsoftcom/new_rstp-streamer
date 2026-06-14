@@ -87,7 +87,9 @@ private:
     AVFormatContext* m_fmt = nullptr;
     int m_outStreamIndex = -1;
     AVRational m_inTimeBase{0, 1};   // 입력 stream time_base 보관(rescale용)
+    std::string m_path;              // 지연 avio_open을 위한 출력 경로 보관
     bool m_open = false;
+    bool m_headerWritten = false;    // avio_open+write_header가 실제로 수행됐는지(첫 키프레임 시점)
     bool m_gotKeyframe = false;
     std::atomic<bool> m_errored{false};
     int64_t m_firstPts = AV_NOPTS_VALUE;   // 첫 키프레임 pts(입력 timebase) — 0 오프셋 기준

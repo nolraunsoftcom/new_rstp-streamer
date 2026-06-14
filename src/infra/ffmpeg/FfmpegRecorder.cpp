@@ -50,28 +50,14 @@ bool FfmpegRecorder::start(const std::string& path, const AVStream* inputVideoSt
     out->codecpar->codec_tag = 0;        // 컨테이너가 적절한 tag를 다시 고르게(remux 정석)
     out->time_base = inputVideoStream->time_base;   // 힌트 — muxer가 최종 결정할 수 있음
 
-    // 3) 파일 열기 (AVFMT_NOFILE muxer가 아니면 pb 필요 — matroska는 파일 기반).
-    rc = avio_open(&fmt->pb, path.c_str(), AVIO_FLAG_WRITE);
-    if (rc < 0) {
-        std::fprintf(stderr, "[FfmpegRecorder] avio_open 실패 (%d): %s\n", rc, path.c_str());
-        avformat_free_context(fmt);     // pb는 열리지 않았으므로 free만
-        m_errored = true;
-        return false;
-    }
-
-    // 4) 헤더 쓰기. 실패 시 pb를 닫고 컨텍스트 해제.
-    rc = avformat_write_header(fmt, nullptr);
-    if (rc < 0) {
-        std::fprintf(stderr, "[FfmpegRecorder] write_header 실패 (%d)\n", rc);
-        avio_closep(&fmt->pb);
-        avformat_free_context(fmt);
-        m_errored = true;
-        return false;
-    }
+    // 3·4) avio_open + write_header는 첫 키프레임 도착 시점으로 지연한다(writePacket에서 수행).
+    // 키프레임 전 hard-kill 시 빈 헤더 파일(~542B)을 남기지 않는다.
 
     m_fmt = fmt;
+    m_path = path;
     m_outStreamIndex = out->index;
     m_inTimeBase = inputVideoStream->time_base;
+    m_headerWritten = false;
     m_open = true;
 
     // D8: 전용 쓰기 스레드 기동. 디코드 스레드는 큐에 넣기만 하고, 이 스레드가 mux한다.
@@ -95,6 +81,24 @@ void FfmpegRecorder::writePacket(const AVPacket* pkt) {
         if ((pkt->flags & AV_PKT_FLAG_KEY) == 0) return;
         m_gotKeyframe = true;
         m_firstPts = pkt->pts;           // 0 오프셋 기준(AV_NOPTS_VALUE이면 오프셋 미적용)
+    }
+
+    // 첫 키프레임 도착 시점에 비로소 파일을 연다 — 키프레임 전 강제종료 시 빈 헤더 파일을 남기지 않는다.
+    if (!m_headerWritten) {
+        int rc = avio_open(&m_fmt->pb, m_path.c_str(), AVIO_FLAG_WRITE);
+        if (rc < 0) {
+            std::fprintf(stderr, "[FfmpegRecorder] avio_open 실패 (%d): %s\n", rc, m_path.c_str());
+            m_errored.store(true);
+            return;
+        }
+        rc = avformat_write_header(m_fmt, nullptr);
+        if (rc < 0) {
+            std::fprintf(stderr, "[FfmpegRecorder] write_header 실패 (%d)\n", rc);
+            avio_closep(&m_fmt->pb);
+            m_errored.store(true);
+            return;
+        }
+        m_headerWritten = true;
     }
 
     // 원본 pkt를 변경하지 않도록 복사본에 작업한다(다른 소비자=디코더와 공유될 수 있음).
@@ -210,8 +214,9 @@ void FfmpegRecorder::stop() {
         return;
     }
 
-    if (m_open) {
-        // 헤더가 쓰였을 때만 트레일러를 쓴다(write_header 성공 후에만 m_open=true).
+    if (m_headerWritten) {
+        // 헤더가 실제로 쓰인 경우(첫 키프레임 도달 후)에만 트레일러를 쓴다.
+        // m_headerWritten=false이면 avio_open도 하지 않았으므로 파일 자체가 없다.
         const int rc = av_write_trailer(m_fmt);
         if (rc < 0) {
             std::fprintf(stderr, "[FfmpegRecorder] write_trailer 실패 (%d)\n", rc);
@@ -224,11 +229,14 @@ void FfmpegRecorder::stop() {
 void FfmpegRecorder::cleanup() {
     if (m_fmt != nullptr) {
         // pb를 먼저 닫는다(avformat_free_context가 pb를 해제하지 않으므로 누수 방지).
+        // m_headerWritten=false인 경우 pb는 열리지 않았으므로 avio_closep은 nullptr를 받아 무동작.
         if (m_fmt->pb != nullptr) avio_closep(&m_fmt->pb);
         avformat_free_context(m_fmt);
         m_fmt = nullptr;
     }
     m_open = false;
+    m_headerWritten = false;
+    m_path.clear();
     m_outStreamIndex = -1;
     m_gotKeyframe = false;
     m_firstPts = AV_NOPTS_VALUE;
