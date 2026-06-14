@@ -24,16 +24,16 @@
 - **11.2 viewer 재시작 세션 무중단**: viewer 종료 후에도 mediamtx(OS 서비스) 연속 UP, 장비 leg hasSource 유지. viewer는 자식프로세스가 아님(설계대로).
 - LaunchdRelayService 통합테스트: 실 launchctl+mediamtx 기동·정리·멱등 통과, 잔여물 0.
 
-### 🔴 발견 — macOS launchd + link-local 라우팅 (M4 로직 결함 아님, 환경/플랫폼)
-- **증상**: viewer가 relay를 콜드스타트로 띄우면(LaunchAgent) mediamtx가 장비를 못 끌어옴 — `ERR [path ch1] [RTSP source] dial tcp 169.254.4.1:8900: connect: no route to host`. 결과 viewer는 404 반복(path not ready), 45s 후에도 first frame 0.
-- **격리 증명**: 같은 순간 ① 셸 ffprobe ② **수기**로 띄운 동일 mediamtx(동일 config/바이너리)는 장비 도달·풀 성공(ready=True, bytes 능동 수신). **launchd로 띄운 mediamtx만 "no route to host".** route get 169.254.4.1 → en0 정상(ARP=장비 MAC).
-- **결론**: macOS의 launchd 프로세스 컨텍스트에서 link-local(169.254/16) 라우팅이 간헐/불가. relay 구현 로직·config·서비스관리·viewer연결·진단은 전부 정상(수기 경로로 입증).
-- **영향 범위**: **사용자 메인 플랫폼은 Windows** → 이 macOS-launchd 특이 이슈는 Windows에 적용되지 않을 가능성 높음(Windows Service 네트워킹 + 실배포는 link-local이 아닐 수 있음). 단 Windows 실검증 필요.
+### ✅ 해결됨 — macOS Local Network Privacy(TCC) (2026-06-14)
+- **초기 증상**: viewer가 relay를 콜드스타트로 띄우면(LaunchAgent) mediamtx가 장비를 못 끌어옴 — `ERR [path ch1] [RTSP source] dial tcp 169.254.4.1:8900: connect: no route to host`. viewer는 404 반복.
+- **근본 원인 규명**: 격리 실험으로 launchd 전체가 아닌 **바이너리별** 문제 확인 — launchd python(Apple 서명)은 link-local 도달 OK, launchd mediamtx(adhoc 서명)만 실패, 셸에서 띄운 mediamtx는 OK. → **macOS 26 Local Network Privacy(TCC)**: 셸 실행은 Terminal(권한 보유)의 responsible-process를 상속해 허용, launchd 실행은 mediamtx 자신이 responsible-process라 미허가 → 로컬네트워크(link-local) 아웃바운드 거부.
+- **해결**: 사용자가 시스템 설정에서 **로컬 네트워크 권한 승인**. 승인 후 launchd mediamtx가 장비 풀 성공(ready=True, bytes 164K→712K 능동 수신). **전체 verify PASS**: 콜드스타트로 viewer가 relay ensureUp→장비 풀→relay 경유 first frame presented(HW+zero-copy), 보호막(0 viewer에도 hasSource), viewer 재시작 세션 무중단 전부 확인. (이전의 "콜드스타트 레이스" 실체 = 권한 차단으로 풀이 영영 실패한 것.)
+- **배포 시사**: macOS 정식 배포는 M5에서 Developer ID 서명 + 로컬네트워크 권한을 설치 흐름에 포함해야 사용자 1회 승인으로 자동화됨. **Windows(메인)은 이 TCC 관문 없음** → 별도 실검증만 필요.
 
 ## 후속 (별도 단계)
 1. **Windows 실검증** (메인 타깃): WindowsRelayService(SCM/schtasks) + 실장비로 relay 풀·viewer 연결·보호막·재시작무중단. (이 세션 맥에선 #ifdef로 컴파일 제외만 보장.)
-2. **macOS launchd link-local 픽스**(macOS도 지원 시): LaunchDaemon 검토 / network-up 의존 / 또는 macOS에선 relay를 비-launchd로 기동. (Windows 우선이라 후순위.)
-3. **콜드스타트 UX**: ensureUp가 main 스레드 ~10s 블로킹 → 비동기화. 실배포는 relay가 상시 OS 서비스(부팅/로그인 자동기동)라 viewer 기동 시 이미 떠 있어 레이스 없음 — 콜드스타트는 최초/서비스다운 시에만.
+2. **macOS 정식 배포(M5)**: Developer ID 서명 + 로컬네트워크 권한을 설치 흐름에 포함 → 사용자 1회 승인으로 자동화. (현재는 사용자가 수동 승인해 동작 확인 완료.)
+3. **콜드스타트 UX**: ensureUp가 main 스레드 ~10s 블로킹 → 비동기화. 실배포는 relay가 상시 OS 서비스(부팅/로그인 자동기동)라 viewer 기동 시 이미 떠 있어 레이스 없음.
 4. 런타임 Control API path 추가/삭제(무재시작 채널 변경), 72h 소크 + 전원차단 주입(설계 §7 M4 전체 수용).
 
 ## 도구
