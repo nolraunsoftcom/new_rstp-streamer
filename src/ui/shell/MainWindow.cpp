@@ -20,7 +20,7 @@
 namespace nv::ui {
 
 static constexpr int kLeftPanelWidth = 200;
-static constexpr int kRightPanelWidth = 320;
+static constexpr int kRightPanelWidth = 280;
 static constexpr int kPanelToggleWidth = 18;
 static constexpr int kHeaderHeight = 32;
 
@@ -189,7 +189,7 @@ MainWindow::MainWindow(GridView* grid, ChannelListPanel* channelPanel, LogPanel*
 
     // ② 파일 탭 — M3-5: FilePanel (녹화/스냅샷 목록)
     m_filePanel = new FilePanel(rightPanel);
-    m_rightTabs->addTab(m_filePanel, QStringLiteral("파일"));
+    m_rightTabs->addTab(m_filePanel, QStringLiteral("스냅샷/녹화"));
 
     // ③ 로그 탭
     logPanel->setParent(rightPanel);
@@ -208,9 +208,10 @@ MainWindow::MainWindow(GridView* grid, ChannelListPanel* channelPanel, LogPanel*
 
     // ── 상태바 ───────────────────────────────────────────────
     auto* statusWidget = new QWidget(central);
-    statusWidget->setFixedHeight(24);
+    statusWidget->setFixedHeight(30);
+    statusWidget->setObjectName(QStringLiteral("statusBar"));
     statusWidget->setStyleSheet(QStringLiteral(
-        "background-color: #f3f3f3; border-top: 1px solid #d0d0d0;"));
+        "#statusBar { background-color: #f3f3f3; border: none; }"));
     auto* statusLayout = new QHBoxLayout(statusWidget);
     statusLayout->setContentsMargins(8, 0, 8, 0);
     statusLayout->setSpacing(16);

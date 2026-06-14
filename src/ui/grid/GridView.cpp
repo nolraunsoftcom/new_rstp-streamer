@@ -14,6 +14,7 @@
 #include "src/domain/layout/GridRules.h"
 #include "src/ui/grid/VideoTileWidget.h"
 #include "src/ui/common/Confirm.h"
+#include "src/ui/common/Style.h"
 
 namespace nv::ui {
 
@@ -21,12 +22,8 @@ namespace nv::ui {
 static constexpr int kInfoBarHeight = 28;   // VIEWER_INFO_BAR_HEIGHT
 static constexpr int kGridSpacing   = 1;    // GRID_SPACING
 
-// ── 레거시 Style.h TOOL_BUTTON ────────────────────────────────────────────
-static const QString kToolButton = QStringLiteral(
-    "QPushButton { color: #3a3a3a; background: transparent; border: none; "
-    "padding: 0; margin: 0 2px; font-size: 12px; min-width: 24px; min-height: 20px; }"
-    "QPushButton:hover { color: #0f62fe; }"
-    "QPushButton:disabled { color: #b0b0b0; }");
+// ── 레거시 Style.h TOOL_BUTTON — Style.h 중앙화 상수 사용 ─────────────────
+// nv::ui::style::TOOL_BUTTON 및 TOOL_BUTTON_REC 참조
 
 // ── 상태 → 표시 문구 (레거시 VlcWidget::statusText()) + 색 ──────────────
 static QString statusTextFor(const QString& state) {
@@ -91,13 +88,13 @@ struct GridView::Tile : public QWidget {
         snapBtn->setFixedSize(24, 20);
         snapBtn->setEnabled(true);
         snapBtn->setToolTip(QStringLiteral("스냅샷 저장"));
-        snapBtn->setStyleSheet(kToolButton);
+        snapBtn->setStyleSheet(nv::ui::style::TOOL_BUTTON);
 
         recBtn = new QPushButton(QStringLiteral("●"), infoBar);
         recBtn->setFixedSize(24, 20);
         recBtn->setEnabled(true);
         recBtn->setToolTip(QStringLiteral("녹화 시작/중지"));
-        recBtn->setStyleSheet(kToolButton);
+        recBtn->setStyleSheet(nv::ui::style::TOOL_BUTTON);
 
         recBadge = new QLabel(QStringLiteral("REC"), infoBar);
         recBadge->setStyleSheet(QStringLiteral(
@@ -460,12 +457,9 @@ void GridView::updateRecordingState(const QString& channelId, bool recording)
     if (it == m_tiles.end()) return;
     Tile* t = it->second;
 
-    // ● 버튼: 녹화 중이면 빨강, 아니면 기본
-    static const QString kRecActive = QStringLiteral(
-        "QPushButton { color: #d13438; background: transparent; border: none; "
-        "padding: 0; margin: 0 2px; font-size: 12px; min-width: 24px; min-height: 20px; }"
-        "QPushButton:hover { color: #a80000; }");
-    t->recBtn->setStyleSheet(recording ? kRecActive : kToolButton);
+    // ● 버튼: 녹화 중이면 TOOL_BUTTON_REC(#ff4040/hover #ff6666), 아니면 TOOL_BUTTON(기본)
+    t->recBtn->setStyleSheet(recording ? nv::ui::style::TOOL_BUTTON_REC
+                                       : nv::ui::style::TOOL_BUTTON);
     t->recBtn->setToolTip(recording ? QStringLiteral("녹화 중지") : QStringLiteral("녹화 시작"));
 
     // REC 뱃지 표시/숨김
