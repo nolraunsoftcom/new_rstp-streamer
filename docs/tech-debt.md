@@ -84,3 +84,12 @@
 | 28 | 음수 dts (avoid_negative_ts 의존) | FfmpegRecorder가 첫 키프레임 pts를 0으로 당기지만 B프레임 dts가 음수일 수 있어 muxer 기본(avoid_negative_ts=auto)에 의존. 명시 설정/주석 미정 | M4 |
 | 29 | RecordingState::Stopping 미사용 / sanitizeName 중복 | enum의 Stopping 상태 미사용(Idle/Recording만), 채널명 살균 로직이 RecordingController(std)와 RecordingPaths(Qt)에 중복. 정리 보류 | 정리 라운드 |
 | (기존 #25) | 디스크 용량 관리 부재 | 회전/상한 없음 | M4 |
+
+## M1~M3 전체 리뷰 잔여(2026-06-13, 전부 Low — 제품 결함 아님, 마지막 정리 라운드에 일괄)
+
+| # | 항목 | 내용 | 해소 시점 |
+|---|---|---|---|
+| 30 | 부채 #27 장부 오기 | #27이 "`RecordingController::tick` 미배선"이라 적혔으나 실제로는 `395ff34`에서 배선됨(`main.cpp:75` `r->tick()`), 배터리 테스트가 600s maxDuration 롤오버 7개 실증. **#27은 해소됨으로 정정 필요** — 현 장부가 "롤오버 안 됨"으로 오해 유발 | 정리 라운드 |
+| 31 | 스냅샷 PNG 비원자적 쓰기 → libpng Read Error | `PngSnapshotWriter::write`가 최종 경로에 직접 저장 → `FilePanel` `QFileSystemWatcher`가 쓰는 중 파일을 디코드해 `libpng error: Read Error`(1h 3회 관찰). 크래시 없이 텍스트 아이콘 폴백이라 무해. temp 파일 쓰기 후 `rename`(원자적 교체)으로 watcher가 완성 파일만 보게 하면 해소 | 정리 라운드 |
+| 32 | 통합테스트 병렬 플래키(포트 경합) | MediaMTX 통합테스트들이 동일 포트(8554 등) 공유 → `ctest -j` 병렬 시 간헐 실패(#168 TEARDOWN). 직렬은 12/12 통과. CTest `RESOURCE_LOCK` 또는 테스트별 랜덤 포트로 직렬화 | CI 도입 시(#3과 묶음) |
+| 33 | `device-battery.sh` RSS 샘플러 깨짐 | 2035 run의 `rss.log`가 `rss_mb=1` 고정 — `diskfull-test.sh`의 `pgrep -x new_viewer` 수정이 `device-battery.sh`엔 미반영. 실 RSS는 앱 `soak.csv`(209~245MB 평탄)로 확인되어 데이터 손실 없음. 스크립트 일관성 차원 수정 | 정리 라운드 |
