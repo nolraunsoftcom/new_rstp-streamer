@@ -10,6 +10,7 @@ using namespace nv::test;
 
 TEST_CASE("RecordingState::toString 각 열거자 반환") {
     CHECK(toString(RecordingState::Idle)      == "Idle");
+    CHECK(toString(RecordingState::Starting)  == "Starting");
     CHECK(toString(RecordingState::Recording) == "Recording");
     CHECK(toString(RecordingState::Stopping)  == "Stopping");
 }

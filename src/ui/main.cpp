@@ -24,6 +24,8 @@
 #include "src/domain/channel/ChannelConfig.h"
 #include "src/domain/recording/RecordingState.h"
 #include "src/domain/relay/RelayConfig.h"
+
+Q_DECLARE_METATYPE(nv::domain::RecordingState)
 #include "src/infra/ffmpeg/ChannelSourceFactory.h"
 #include "src/infra/persist/JsonChannelRepository.h"
 #include "src/infra/persist/RecordingPaths.h"
@@ -62,6 +64,8 @@ int main(int argc, char** argv) {
         qputenv("QT_WIDGETS_RHI", "1");
     }
     QApplication app(argc, argv);
+    // P4d: RecordingState를 Qt 메타타입으로 등록 — QueuedConnection Q_ARG 전달에 필요
+    qRegisterMetaType<nv::domain::RecordingState>("nv::domain::RecordingState");
     app.setApplicationName(QStringLiteral("영상관리시스템"));
     app.setWindowIcon(QIcon(QStringLiteral(":/logo.png")));
 
@@ -152,7 +156,7 @@ int main(int argc, char** argv) {
                 QMetaObject::invokeMethod(winPtr, "onRecordingState",
                     Qt::QueuedConnection,
                     Q_ARG(QString, QString::fromStdString(id)),
-                    Q_ARG(bool, recCtrl.stateOf(id) == nv::domain::RecordingState::Recording));
+                    Q_ARG(nv::domain::RecordingState, recCtrl.stateOf(id)));
                 // P3: 스냅샷 저장 토스트 (성공 시만)
                 if (ok) {
                     QMetaObject::invokeMethod(winPtr, "onSnapshotSaved",
@@ -299,12 +303,11 @@ int main(int argc, char** argv) {
         // prevRecState: control 스레드 단일 호출이므로 mutex 불필요.
         auto prevRecState = std::make_shared<std::map<std::string, nv::domain::RecordingState>>();
         recCtrl.setObserver([&, prevRecState](const std::string& id, nv::domain::RecordingState state) {
-            const bool rec = (state == nv::domain::RecordingState::Recording);
             if (winPtr != nullptr) {
                 QMetaObject::invokeMethod(winPtr, "onRecordingState",
                     Qt::QueuedConnection,
                     Q_ARG(QString, QString::fromStdString(id)),
-                    Q_ARG(bool, rec));
+                    Q_ARG(nv::domain::RecordingState, state));
 
                 // P3: 전이 감지
                 const auto prev = [&]() -> nv::domain::RecordingState {

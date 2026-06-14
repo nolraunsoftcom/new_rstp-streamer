@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 #include "src/domain/channel/ChannelConfig.h"
+#include "src/domain/recording/RecordingState.h"
 #include "src/infra/system/ResourceMonitor.h"
 #include "src/ui/shell/Toast.h"
 
@@ -49,7 +50,7 @@ public slots:
     void onSnapshot(QString channelId, QString state, int attempts, QList<int> stages,
                     double pps, qlonglong msSinceLastPacket, QString reason);
     // M3-5: 녹화 상태 변경 → 그리드 타일 버튼 + 파일 패널 갱신
-    void onRecordingState(QString channelId, bool recording);
+    void onRecordingState(QString channelId, nv::domain::RecordingState state);
     // P3: 토스트 트리거 슬롯 — control→UI queued 호출 (기존 이벤트 흐름 재사용)
     void onSnapshotSaved(QString channelName, QString filePath);
     void onRecordingSaved(QString channelName, QString filePath, bool autoSaved,

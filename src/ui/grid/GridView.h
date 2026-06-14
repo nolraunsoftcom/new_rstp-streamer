@@ -8,6 +8,7 @@
 #include <vector>
 #include "src/app/ports/IFrameSurfaceRegistry.h"
 #include "src/domain/channel/ChannelConfig.h"
+#include "src/domain/recording/RecordingState.h"
 #include "src/ui/shell/RepaintClock.h"
 
 class QGridLayout;
@@ -42,7 +43,7 @@ public:
                           const QList<int>& stages, double pps, qlonglong msSince,
                           const QString& reason);
     // M3-5: 녹화 상태 변경 → 정보바 ● 버튼 + REC 뱃지 갱신
-    void updateRecordingState(const QString& channelId, bool recording);
+    void updateRecordingState(const QString& channelId, nv::domain::RecordingState state);
 
 protected:
     void resizeEvent(QResizeEvent* ev) override;

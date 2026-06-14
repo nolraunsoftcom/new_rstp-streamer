@@ -5,11 +5,12 @@
 // 순수 도메인 — Qt/FFmpeg include 없음.
 namespace nv::domain {
 
-enum class RecordingState { Idle, Recording, Stopping };
+enum class RecordingState { Idle, Starting, Recording, Stopping };
 
 constexpr std::string_view toString(RecordingState s) {
     switch (s) {
         case RecordingState::Idle:      return "Idle";
+        case RecordingState::Starting:  return "Starting";
         case RecordingState::Recording: return "Recording";
         case RecordingState::Stopping:  return "Stopping";
     }

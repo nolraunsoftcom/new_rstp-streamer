@@ -370,12 +370,12 @@ void MainWindow::updateToggleButtons() {
     }
 }
 
-void MainWindow::onRecordingState(QString channelId, bool recording)
+void MainWindow::onRecordingState(QString channelId, nv::domain::RecordingState state)
 {
     // 타일 정보바 ● 버튼 색 + REC 뱃지 갱신
-    m_grid->updateRecordingState(channelId, recording);
+    m_grid->updateRecordingState(channelId, state);
     // 녹화 중지 시 파일 패널 갱신 (새 MKV 파일이 생겼을 수 있음)
-    if (!recording && m_filePanel) {
+    if (state == nv::domain::RecordingState::Idle && m_filePanel) {
         m_filePanel->refresh();
     }
 }

@@ -12,6 +12,7 @@
 #include <QScrollBar>
 #include <QVBoxLayout>
 #include "src/domain/layout/GridRules.h"
+#include "src/domain/recording/RecordingState.h"
 #include "src/ui/grid/VideoTileWidget.h"
 #include "src/ui/common/Confirm.h"
 #include "src/ui/common/Style.h"
@@ -451,22 +452,31 @@ void GridView::updateTileStatus(const QString& channelId, const QString& state, 
     }
 }
 
-void GridView::updateRecordingState(const QString& channelId, bool recording)
+void GridView::updateRecordingState(const QString& channelId, nv::domain::RecordingState state)
 {
     auto it = m_tiles.find(channelId.toStdString());
     if (it == m_tiles.end()) return;
     Tile* t = it->second;
 
-    // ● 버튼: 녹화 중이면 TOOL_BUTTON_REC(#ff4040/hover #ff6666), 아니면 TOOL_BUTTON(기본)
-    t->recBtn->setStyleSheet(recording ? nv::ui::style::TOOL_BUTTON_REC
-                                       : nv::ui::style::TOOL_BUTTON);
-    t->recBtn->setToolTip(recording ? QStringLiteral("녹화 중지") : QStringLiteral("녹화 시작"));
+    using nv::domain::RecordingState;
+    const bool active = (state == RecordingState::Recording ||
+                         state == RecordingState::Starting);
 
-    // REC 뱃지 표시/숨김
-    if (recording)
+    // ● 버튼: Starting/Recording이면 TOOL_BUTTON_REC(#ff4040), 아니면 TOOL_BUTTON(기본)
+    t->recBtn->setStyleSheet(active ? nv::ui::style::TOOL_BUTTON_REC
+                                    : nv::ui::style::TOOL_BUTTON);
+    t->recBtn->setToolTip(active ? QStringLiteral("녹화 중지") : QStringLiteral("녹화 시작"));
+
+    // P4d: REC 뱃지 — Starting(노랑), Recording(빨강), Idle(숨김)
+    if (state == RecordingState::Starting) {
+        t->recBadge->setStyleSheet(nv::ui::style::REC_BADGE_STARTING);
         t->recBadge->show();
-    else
+    } else if (state == RecordingState::Recording) {
+        t->recBadge->setStyleSheet(nv::ui::style::REC_BADGE_ACTIVE);
+        t->recBadge->show();
+    } else {
         t->recBadge->hide();
+    }
 }
 
 } // namespace nv::ui
