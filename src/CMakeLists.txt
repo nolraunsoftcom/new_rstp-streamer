@@ -81,7 +81,8 @@ if(APPLE)
     "-framework Foundation")
 elseif(WIN32)
   target_sources(nv_infra PRIVATE
-    infra/relay/WindowsRelayService.cpp)
+    infra/relay/WindowsRelayService.cpp
+    infra/video/VtMetalBridge_stub.cpp)   # 비-Apple: VtMetalBridge no-op(링크 충족, RGBA 폴백)
 endif()
 
 set(CMAKE_AUTORCC ON)

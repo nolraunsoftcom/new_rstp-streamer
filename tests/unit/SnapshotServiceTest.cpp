@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <algorithm>   // std::any_of — MSVC는 transitive include에 의존 불가
 #include "src/app/SnapshotService.h"
 #include "tests/helpers/FakeLogger.h"
 #include "tests/helpers/FakeSnapshotSink.h"

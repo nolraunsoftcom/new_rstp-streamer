@@ -25,8 +25,6 @@ add_executable(nv_unit_tests
   unit/JsonChannelRepositoryTest.cpp
   unit/RendererSelectTest.cpp
   unit/RecordingStateTest.cpp
-  unit/FfmpegRecorderTest.cpp
-  unit/SnapshotWriterTest.cpp
   unit/RecordingControllerTest.cpp
   unit/SnapshotServiceTest.cpp
   unit/RelayPortsTest.cpp
@@ -38,6 +36,12 @@ target_link_libraries(nv_unit_tests PRIVATE nv_domain nv_app nv_infra Catch2::Ca
 target_compile_options(nv_unit_tests PRIVATE ${NV_WARNING_FLAGS})
 # FfmpegRecorderTest가 fixture 경로 기본값으로 사용 (NV_FIXTURE_DIR로 오버라이드 가능).
 target_compile_definitions(nv_unit_tests PRIVATE PROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# POSIX(unistd/getpid/popen-ffprobe, /tmp) 의존 테스트는 비-Windows에서만 빌드. macOS CI가 검증.
+if(NOT WIN32)
+  target_sources(nv_unit_tests PRIVATE
+    unit/FfmpegRecorderTest.cpp
+    unit/SnapshotWriterTest.cpp)
+endif()
 
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(CTest)
@@ -57,13 +61,17 @@ target_compile_options(nv_ui_tests PRIVATE ${NV_WARNING_FLAGS})
 target_compile_definitions(nv_ui_tests PRIVATE QT_QPA_PLATFORM=offscreen)
 catch_discover_tests(nv_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-add_executable(nv_integration_tests
-  integration/FfmpegSourceIT.cpp
-  integration/FfmpegRecorderIT.cpp
-  integration/RelayControlApiIT.cpp
-  integration/LaunchdRelayServiceIT.cpp
-)
-target_include_directories(nv_integration_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(nv_integration_tests PRIVATE nv_infra Catch2::Catch2WithMain Qt6::Core Qt6::Network)
-target_compile_definitions(nv_integration_tests PRIVATE PROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-catch_discover_tests(nv_integration_tests PROPERTIES LABELS integration SKIP_RETURN_CODE 4)
+# 통합테스트는 POSIX(harness.h의 sys/wait.h, fork)·launchd 의존이라 비-Windows 전용.
+# (CI는 어차피 -LE integration으로 실행 제외 — Windows는 빌드 자체를 제외)
+if(NOT WIN32)
+  add_executable(nv_integration_tests
+    integration/FfmpegSourceIT.cpp
+    integration/FfmpegRecorderIT.cpp
+    integration/RelayControlApiIT.cpp
+    integration/LaunchdRelayServiceIT.cpp
+  )
+  target_include_directories(nv_integration_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(nv_integration_tests PRIVATE nv_infra Catch2::Catch2WithMain Qt6::Core Qt6::Network)
+  target_compile_definitions(nv_integration_tests PRIVATE PROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+  catch_discover_tests(nv_integration_tests PROPERTIES LABELS integration SKIP_RETURN_CODE 4)
+endif()

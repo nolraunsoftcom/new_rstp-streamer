@@ -238,6 +238,9 @@ void RhiVideoRenderer::initialize(QRhiCommandBuffer*) {
     ensureRgbaPipeline();   // placeholder 텍스처(m_texture)를 NV12 SRB도 공유하므로 먼저.
 
     // NV12 zero-copy 브리지 — QRhi가 쓰는 MTLDevice로 CVMetalTextureCache 생성(macOS만).
+    // QRhiMetalNativeHandles는 Metal 백엔드(Apple)에서만 정의된다. 비-Apple은 브리지를
+    // 초기화하지 않아 m_bridgeReady=false 유지 → NV12 경로 미사용, RGBA(CPU) 폴백.
+#if defined(__APPLE__)
     if (!m_bridgeReady) {
         const QRhiNativeHandles* nh = m_rhi->nativeHandles();
         const auto* mh = static_cast<const QRhiMetalNativeHandles*>(nh);
@@ -249,6 +252,7 @@ void RhiVideoRenderer::initialize(QRhiCommandBuffer*) {
             }
         }
     }
+#endif
 }
 
 void RhiVideoRenderer::render(QRhiCommandBuffer* cb) {
