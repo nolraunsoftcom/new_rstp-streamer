@@ -16,7 +16,6 @@ extern "C" {
 
 #include <cerrno>
 #include <chrono>
-#include <condition_variable>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -86,62 +85,18 @@ void FfmpegStreamSource::close() {
 
     if (!m_thread.joinable()) return;
 
-    // VideoToolbox avcodec_receive_frame가 CoreMedia 세마포어에서 wedge되면 join이
-    // 영원히 막혀 control 스레드 전체가 정지한다.
+    // close()가 디코드 스레드 자신에서 호출되면(재진입: run()→listener→disconnect→close)
+    // self-join은 deadlock/terminate가 되므로 detach한다. 그 외에는 디코드 스레드가
+    // 끝날 때까지 join한다. m_stop=true + interrupt 콜백으로 FFmpeg I/O가 곧 풀려 종료된다.
     //
-    // 안전 전략: shared 상태를 힙에 두고 별도 joiner 스레드가 join을 시도한다.
-    // 5초 이내에 join 완료되면 정상 경로(joiner를 join해 끝).
-    // 타임아웃이면 디코드 스레드를 detach하고 joiner도 detach — close() ≤5s 보장.
-    //
-    // shared_ptr 이유: 타임아웃 경로에서 close()가 먼저 반환된 뒤 joiner 스레드가
-    // 계속 실행될 수 있다. 스택 변수를 캡처하면 dangling 참조 UB 발생하므로
-    // 공유 상태는 모두 힙에 둔다.
-    //
-    // detach된 디코드 스레드는 m_stop=true라 I/O interrupt / 다음 패킷 타임아웃으로
-    // 결국 빠져나오고, 그때 joiner 스레드의 join()도 완료되어 joiner도 종료된다.
-    // 앱 관리 응답성 보존: wedge 시 누수보다 영구 블로킹이 더 치명적.
-    struct JoinState {
-        std::mutex mu;
-        std::condition_variable cv;
-        bool done = false;
-    };
-    auto state = std::make_shared<JoinState>();
-
-    std::thread joiner([this, state] {
-        m_thread.join();
-        {
-            std::lock_guard lk(state->mu);
-            state->done = true;
-        }
-        state->cv.notify_one();
-    });
-
-    bool joinedInTime = false;
-    {
-        std::unique_lock lk(state->mu);
-        joinedInTime = state->cv.wait_for(lk, std::chrono::seconds(5),
-                                          [&state] { return state->done; });
-    }
-
-    if (joinedInTime) {
-        joiner.join();   // 정상 경로: joiner는 이미 완료 상태
-    } else {
-        // 5초 타임아웃 — 디코드 스레드가 wedge됐다고 판단.
-        std::fprintf(stderr,
-            "[FfmpegStreamSource] CRITICAL: decode thread wedged — detaching after 5s\n");
-        // joiner를 먼저 detach해야 한다: 이후 m_thread.detach() 하면 joiner의
-        // m_thread.join() 호출이 not-joinable 스레드에 대한 것이 되어 terminate.
-        // joiner가 detach된 뒤 m_thread를 detach하면 joiner는 잠시 후 join()이
-        // 반환(detach된 스레드 대상 join은 UB)되므로 순서를 바꾼다:
-        // m_thread.detach()를 먼저 하면 joiner의 join()이 UB — 안전하지 않다.
-        //
-        // 올바른 순서: joiner.detach() 먼저 → m_thread.detach().
-        // joiner가 detach된 상태에서 joiner 내부의 m_thread.join()이 실행되면
-        // m_thread가 아직 joinable이므로 정상 join된다. m_thread는 m_stop=true라
-        // 곧 종료되고 joiner도 종료된다. shared_ptr(state)는 joiner 종료 시 소멸.
-        joiner.detach();
+    // (기존엔 별도 joiner 스레드 + 5초 타임아웃 후 m_thread.detach() 로직이었으나, joiner의
+    //  m_thread.join()과 close()의 m_thread.detach()가 같은 std::thread에 동시 작용해 상태가
+    //  깨지는 race가 있었다 — Windows에서 ucrtbase fail-fast(0xc0000409)의 원인. 단순화로 제거.)
+    if (m_thread.get_id() == std::this_thread::get_id()) {
         m_thread.detach();
+        return;
     }
+    m_thread.join();
 }
 
 bool FfmpegStreamSource::startRecording(const std::string& outputPath) {
