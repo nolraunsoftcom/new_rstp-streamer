@@ -9,7 +9,6 @@
       "features": [
         "avcodec",
         "avformat",
-        "avutil",
         "swscale"
       ],
       "default-features": false
