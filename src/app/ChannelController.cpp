@@ -59,6 +59,11 @@ void ChannelController::notifyIfChanged() {
     if (!m_observer) return;
     ChannelSnapshot s{m_sm.state(), m_sm.reconnectAttempts(), m_sm.lastReason(), m_health};
     s.packetsPerSec = m_packetsPerSec;
+    s.bitrateKbps = m_bitrateKbps;
+    s.droppedFrames = m_droppedFrames;
+    s.decodedFrames = m_decodedFrames;
+    s.displayedFrames = m_displayedFrames;
+    s.readBytesTotal = m_readBytesTotal;
     s.msSinceLastPacket =
         m_lastPacketAt ? std::chrono::duration_cast<std::chrono::milliseconds>(
                              m_clock.now() - *m_lastPacketAt)
@@ -71,6 +76,8 @@ void ChannelController::notifyIfChanged() {
 
 void ChannelController::connect() {
     m_lastRateAt = m_clock.now(); m_packetsInWindow = 0; m_lastPacketAt.reset(); m_packetsPerSec = 0.0;
+    m_bytesInWindow = 0; m_bitrateKbps = 0.0; m_droppedFrames = 0;   // 새 연결 — 지표 리셋
+    m_decodedFrames = 0; m_displayedFrames = 0; m_readBytesTotal = 0;
     apply(m_sm.connectRequested(m_clock.now()));
     logTransition("connect");
     notifyIfChanged();
@@ -78,6 +85,7 @@ void ChannelController::connect() {
 
 void ChannelController::disconnect() {
     m_lastRateAt = m_clock.now(); m_packetsInWindow = 0; m_lastPacketAt.reset(); m_packetsPerSec = 0.0;
+    m_bytesInWindow = 0; m_bitrateKbps = 0.0;   // 드롭 누적은 마지막 값 유지(연결 시 리셋)
     apply(m_sm.disconnectRequested(m_clock.now()));
     logTransition("disconnect");
     notifyIfChanged();
@@ -102,7 +110,10 @@ void ChannelController::tick() {
         std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastRateAt).count();
     if (elapsedMs > 0) {
         m_packetsPerSec = m_packetsInWindow * 1000.0 / static_cast<double>(elapsedMs);
+        // bitrate(kbps) = 바이트*8/1000 / 초
+        m_bitrateKbps = static_cast<double>(m_bytesInWindow) * 8.0 / static_cast<double>(elapsedMs);
         m_packetsInWindow = 0;
+        m_bytesInWindow = 0;
         m_lastRateAt = now;
     }
 
@@ -141,8 +152,20 @@ void ChannelController::onPacketReceived() {
     notifyIfChanged();
 }
 
+void ChannelController::onBytesReceived(long long bytes) {
+    if (!m_sourceAlive) return;
+    m_bytesInWindow += bytes;   // tick에서 1초 윈도우로 bitrate 산출
+    m_readBytesTotal += bytes;  // 누적(채널정보 Demux 데이터 크기)
+}
+
+void ChannelController::onFrameDropped() {
+    if (!m_sourceAlive) return;
+    ++m_droppedFrames;          // 누적 드롭(디코드/HW전송 실패)
+}
+
 void ChannelController::onFrameDecoded() {
     if (!m_sourceAlive) return;
+    ++m_decodedFrames;                             // 누적(채널정보 비디오 디코드)
     m_health.markReached(HealthStage::Decoding);   // 상태머신 전이 없음 — 진단 전용
     if (!m_loggedDecoded) {
         m_loggedDecoded = true;
@@ -154,6 +177,7 @@ void ChannelController::onFrameDecoded() {
 
 void ChannelController::onFramePresented() {
     if (!m_sourceAlive) return;
+    ++m_displayedFrames;                           // 누적(채널정보 비디오 출력)
     apply(m_sm.framePresented(m_clock.now()));
     m_health.markReached(HealthStage::Presenting);
     if (!m_loggedPresented) {

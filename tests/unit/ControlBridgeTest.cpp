@@ -38,13 +38,18 @@ TEST_CASE("ControlBridge::publish — Streaming 상태 스냅샷 직렬화") {
     snap.reason  = nv::domain::DiagnosisReason::None;
     snap.packetsPerSec    = 30.0;
     snap.msSinceLastPacket = 50;
+    snap.bitrateKbps      = 4096.0;
+    snap.droppedFrames    = 3;
+    snap.decodedFrames    = 3156;
+    snap.displayedFrames  = 1570;
+    snap.readBytesTotal   = 3879731;
     snap.health.markReached(nv::domain::HealthStage::Presenting);  // 전 단계 Ok
 
     bridge.publish(QStringLiteral("ch1"), snap);
 
     REQUIRE(spy.count() == 1);
     const QList<QVariant>& args = spy.at(0);
-    REQUIRE(args.size() == 7);
+    REQUIRE(args.size() == 12);
 
     // arg0: channelId
     CHECK(args.at(0).toString() == QStringLiteral("ch1"));
@@ -63,6 +68,13 @@ TEST_CASE("ControlBridge::publish — Streaming 상태 스냅샷 직렬화") {
     CHECK(args.at(5).toLongLong() == 50LL);
     // arg6: reason
     CHECK(args.at(6).toString() == QStringLiteral("None"));
+    // arg7: bitrateKbps, arg8: droppedFrames
+    CHECK(args.at(7).toDouble() == 4096.0);
+    CHECK(args.at(8).toLongLong() == 3LL);
+    // arg9: decoded, arg10: displayed, arg11: readBytes
+    CHECK(args.at(9).toLongLong() == 3156LL);
+    CHECK(args.at(10).toLongLong() == 1570LL);
+    CHECK(args.at(11).toLongLong() == 3879731LL);
 }
 
 TEST_CASE("ControlBridge::publish — Failed 상태 + reason 직렬화") {
@@ -87,7 +99,7 @@ TEST_CASE("ControlBridge::publish — Failed 상태 + reason 직렬화") {
 
     REQUIRE(spy.count() == 1);
     const QList<QVariant>& args = spy.at(0);
-    REQUIRE(args.size() == 7);
+    REQUIRE(args.size() == 12);
 
     CHECK(args.at(0).toString() == QStringLiteral("ch2"));
     CHECK(args.at(1).toString() == QStringLiteral("Failed"));
@@ -108,4 +120,10 @@ TEST_CASE("ControlBridge::publish — Failed 상태 + reason 직렬화") {
     CHECK(args.at(4).toDouble() == 0.0);
     CHECK(args.at(5).toLongLong() == -1LL);
     CHECK(args.at(6).toString() == QStringLiteral("NoPackets"));
+    // arg7~11: bitrate/dropped/decoded/displayed/readBytes 모두 기본 0
+    CHECK(args.at(7).toDouble() == 0.0);
+    CHECK(args.at(8).toLongLong() == 0LL);
+    CHECK(args.at(9).toLongLong() == 0LL);
+    CHECK(args.at(10).toLongLong() == 0LL);
+    CHECK(args.at(11).toLongLong() == 0LL);
 }

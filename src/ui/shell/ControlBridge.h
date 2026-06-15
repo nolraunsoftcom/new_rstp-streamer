@@ -18,12 +18,20 @@ public:
                              s.attempts, stages, s.packetsPerSec,
                              static_cast<qlonglong>(s.msSinceLastPacket),
                              QString::fromUtf8(toString(s.reason).data(),
-                                               static_cast<int>(toString(s.reason).size())));
+                                               static_cast<int>(toString(s.reason).size())),
+                             s.bitrateKbps,
+                             static_cast<qlonglong>(s.droppedFrames),
+                             static_cast<qlonglong>(s.decodedFrames),
+                             static_cast<qlonglong>(s.displayedFrames),
+                             static_cast<qlonglong>(s.readBytesTotal));
     }
 
 signals:
     void snapshotChanged(QString channelId, QString state, int attempts, QList<int> stages,
-                         double pps, qlonglong msSinceLastPacket, QString reason);
+                         double pps, qlonglong msSinceLastPacket, QString reason,
+                         double bitrateKbps, qlonglong droppedFrames,
+                         qlonglong decodedFrames, qlonglong displayedFrames,
+                         qlonglong readBytesTotal);
 };
 
 } // namespace nv::ui
