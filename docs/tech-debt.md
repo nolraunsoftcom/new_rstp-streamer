@@ -117,3 +117,14 @@
 | 24 | 순차 다채널 종료 누적 지연 | 실장비 wedge 발생 시 재검토(현재 미발생) |
 | 25 | 디스크 용량관리(회전/상한) | D10 백오프가 풀-디스크 안전 처리. 사전관리/회전은 큰 작업 → 운영 요구 시 |
 | 29 | Stopping enum/sanitizeName 중복 | 순수 미관·기능가치 0 → 오버엔지니어링 회피, 보류 |
+
+## M4 relay 부채 (2026-06-14, 코드 리뷰 후속)
+
+| # | 항목 | 내용 | 해소 시점 |
+|---|---|---|---|
+| 34 | Windows relay 실기기 미검증 | 메인 타깃이 Windows인데 `WindowsRelayService`(SCM/schtasks)는 macOS 세션에서 `#ifdef` 컴파일 제외만 보장. 실장비로 relay 풀·viewer 연결·보호막·재시작무중단 검증 필요 | **후속 1순위** (Windows 실검증) |
+| 35 | plist/sc 명령 이스케이프 불변량 | `LaunchdRelayService` plist(XML)·`WindowsRelayService` sc/schtasks 명령이 입력을 이스케이프 없이 삽입. 현재 입력은 전부 앱 상수(HOME·고정 label·cfgDir·exe)라 안전하나, 사용자 유래 입력 추가 시 XML/셸 이스케이프 필요. 헤더에 "입력은 앱 상수만" 불변량 주석 권장 | 정리 라운드 |
+| 36 | relay 콜드스타트 first-frame ~28s | viewer가 relay를 콜드스타트로 띄우면 relay 부팅(~16s)+viewer 재연결로 첫 프레임까지 ~28s. 워커 스레드화(#4)로 UI 블로킹은 제거됨. 실배포는 relay가 상시 OS 서비스라 즉시 — 콜드스타트는 개발/검증 경로에 한정 | M5 (상시 서비스 배포) |
+| 37 | macOS 정식 배포 서명/권한 | launchd mediamtx의 Local Network Privacy(TCC) 승인이 현재 사용자 수동. 정식 배포는 Developer ID 서명 + 로컬네트워크 권한을 설치 흐름에 포함해 1회 승인 자동화 필요 | M5 (배포) |
+| 38 | LaunchdRelayServiceIT teardown 잔여물 | 통합테스트가 `/tmp/nv_launchd_it_relay.yml`·로그를 남김. 제품 무관, IT 정리 보강 | 정리 라운드 |
+| (후속) | 런타임 Control API path 추가/삭제 | 현재 `updateChannels`가 config 재생성+ensureUp 멱등 재기동(#6). 무재시작 path add/remove(Control API 직접 호출)는 미구현 | M5/운영 |
