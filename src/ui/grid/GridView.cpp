@@ -68,9 +68,11 @@ struct GridView::Tile : public QWidget {
     VideoTileWidget* video       = nullptr;
     std::string      channelId;
     QString          name;
+    nv::domain::RecordingState recState{nv::domain::RecordingState::Idle};  // 메뉴 라벨(녹화 시작/중지)용
 
     // ── DnD(위치 교환) — 타일은 드래그 출발지. 드롭은 GridView(콘텐츠)가 위치 기반 처리. ──
     QPoint           dragStartPos;            // 좌클릭 누른 지점(드래그 임계 판정용)
+    std::function<void()> onDoubleClick;      // 더블클릭 → 전체화면(GridView가 배선)
 
     Tile(nv::app::IFrameSurfaceRegistry& registry, std::string id, QString nm, QWidget* parent)
         : QWidget(parent), channelId(std::move(id)), name(std::move(nm))
@@ -160,6 +162,11 @@ struct GridView::Tile : public QWidget {
         mime->setText(name);
         drag->setMimeData(mime);
         drag->exec(Qt::MoveAction);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton && onDoubleClick) { onDoubleClick(); return; }
+        QWidget::mouseDoubleClickEvent(e);
     }
 };
 
@@ -445,6 +452,11 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
             auto* tile = new Tile(*m_registry, cfg.id, qName, m_content);
             m_tiles[cfg.id] = tile;
 
+            // 더블클릭 → 전체화면 탭
+            tile->onDoubleClick = [this, id = cfg.id] {
+                if (m_cb.fullscreenRequested) m_cb.fullscreenRequested(id);
+            };
+
             // 단일 RepaintClock tick에 pollFrame 연결 (자체 타이머 없음)
             connect(&m_repaintClock, &RepaintClock::tick,
                     tile->video, &VideoTileWidget::pollFrame);
@@ -471,25 +483,43 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
                     "border: 1px solid #c8c8c8; font-size: 12px; }"
                     "QMenu::item { padding: 6px 20px; }"
                     "QMenu::item:selected { background-color: #dbeafe; }"));
+                // 레거시 VlcWidget::showContextMenu 구성 그대로(위치 교환은 DnD로 대체돼 제외).
+                using nv::domain::RecordingState;
+                const bool rec = (tile->recState == RecordingState::Recording ||
+                                  tile->recState == RecordingState::Starting);
+                auto* actFull   = menu.addAction(QStringLiteral("전체화면으로 열기"));
+                auto* actInfo   = menu.addAction(QStringLiteral("채널 정보"));
                 auto* actEdit   = menu.addAction(QStringLiteral("채널 수정"));
-                auto* actRetry  = menu.addAction(QStringLiteral("재시도"));
-                QMenu* swapMenu = menu.addMenu(QStringLiteral("위치 교환"));
-                for (const auto& other : m_lastConfigs) {
-                    if (other.id == tile->channelId) continue;
-                    swapMenu->addAction(QString::fromStdString(other.name))->setData(
-                        QString::fromStdString(other.id));
-                }
+                auto* actSnap   = menu.addAction(QStringLiteral("스냅샷 저장"));
+                auto* actRecord = menu.addAction(rec ? QStringLiteral("녹화 중지")
+                                                     : QStringLiteral("녹화 시작"));
+                menu.addSeparator();
+                auto* actRetry  = menu.addAction(QStringLiteral("재연결"));
+                menu.addSeparator();
                 auto* actRemove = menu.addAction(QStringLiteral("채널 삭제"));
                 auto* chosen    = menu.exec(tile->mapToGlobal(p));
-                if (chosen == actEdit)        m_cb.editRequested(tile->channelId);
+                if (chosen == nullptr) return;
+                if (chosen == actFull) {
+                    if (m_cb.fullscreenRequested) m_cb.fullscreenRequested(tile->channelId);
+                }
+                else if (chosen == actInfo) {
+                    if (m_cb.infoRequested) m_cb.infoRequested(tile->channelId);
+                }
+                else if (chosen == actEdit)   m_cb.editRequested(tile->channelId);
+                else if (chosen == actSnap) {
+                    if (m_cb.snapshotRequested) m_cb.snapshotRequested(tile->channelId);
+                }
+                else if (chosen == actRecord) {
+                    if (m_cb.recordToggleRequested) m_cb.recordToggleRequested(tile->channelId);
+                }
                 else if (chosen == actRetry)  m_cb.retryRequested(tile->channelId);
                 else if (chosen == actRemove) {
                     // U1: 삭제 확인 다이얼로그 (F5: confirmDelete 헬퍼)
-                    if (nv::ui::confirmDelete(tile, tile->name)) m_cb.removeRequested(tile->channelId);
+                    // parent는 최상위 윈도우 — tile(RHI 영상 표면)을 parent로 주면 macOS에서
+                    // 메시지박스가 깨져 렌더된다(리스트 삭제와 동일하게 윈도우 기준으로 띄움).
+                    if (nv::ui::confirmDelete(tile->window(), tile->name))
+                        m_cb.removeRequested(tile->channelId);
                 }
-                else if (chosen != nullptr && !chosen->data().isNull())
-                    m_cb.swapRequested(tile->channelId,
-                                       chosen->data().toString().toStdString());
             });
         }
     }
@@ -567,6 +597,7 @@ void GridView::updateRecordingState(const QString& channelId, nv::domain::Record
     auto it = m_tiles.find(channelId.toStdString());
     if (it == m_tiles.end()) return;
     Tile* t = it->second;
+    t->recState = state;   // 우클릭 메뉴 "녹화 시작/중지" 라벨용
 
     using nv::domain::RecordingState;
     const bool active = (state == RecordingState::Recording ||

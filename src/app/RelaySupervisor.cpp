@@ -37,6 +37,15 @@ bool RelaySupervisor::ensureUp(const std::vector<nv::domain::RelayPath>& channel
     return ok;
 }
 
+bool RelaySupervisor::restart(const std::vector<nv::domain::RelayPath>& channels,
+                              const std::string& configPath)
+{
+    m_log.log(LogLevel::Warn, "", "RelaySupervisor",
+              "MediaMTX 헬스 지속 실패 — 정리 후 재기동(self-heal)");
+    m_svc.stop();   // bootout — KeepAlive 포함 완전 제거(wedge 프로세스도 정리)
+    return ensureUp(channels, configPath);
+}
+
 std::map<std::string, RelayChannelHealth> RelaySupervisor::pollHealth(
     const std::vector<nv::domain::RelayPath>& relayChannels)
 {

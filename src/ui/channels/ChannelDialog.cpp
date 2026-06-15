@@ -92,7 +92,7 @@ QPushButton:default {
 namespace nv::ui {
 
 ChannelDialog::ChannelDialog(QWidget* parent, const QString& name, const QString& url,
-                             bool autoConnect)
+                             bool autoConnect, bool useRelay)
     : QDialog(parent) {
     setWindowTitle(name.isEmpty() ? QStringLiteral("채널 추가") : QStringLiteral("채널 수정"));
     setModal(true);
@@ -127,23 +127,38 @@ ChannelDialog::ChannelDialog(QWidget* parent, const QString& name, const QString
     optionsLayout->setContentsMargins(10, 16, 10, 10);
     optionsLayout->setSpacing(8);
 
-    // P1: relay 필드 — 시각 패리티용. 기능은 channels.json useRelay로 결정되므로 비활성.
+    // MediaMTX relay 사용 체크박스(레거시 ConnectionDialog 대응). 우리 구조에서 relay 경로는
+    // 채널 id로 자동 결정(rtsp://127.0.0.1:8554/<id>)되므로 path 입력칸은 읽기전용 안내용이다.
+    m_useRelay = new QCheckBox(QStringLiteral("MediaMTX relay 사용"), optionsGroup);
+    m_useRelay->setToolTip(QStringLiteral(
+        "장비에 직결하는 대신 로컬 MediaMTX(127.0.0.1:8554)를 경유합니다."));
+    m_useRelay->setChecked(useRelay);
+    optionsLayout->addWidget(m_useRelay);
+
     auto* relayPathLayout = new QHBoxLayout();
     relayPathLayout->setContentsMargins(0, 0, 0, 0);
     relayPathLayout->setSpacing(8);
 
-    auto* relayPathLabel = new QLabel(QStringLiteral("Relay path:"), optionsGroup);
-    relayPathLabel->setMinimumWidth(82);    // P1: 레거시 setMinimumWidth(82)
+    auto* relayPathLabel = new QLabel(QStringLiteral("Relay 경로:"), optionsGroup);
+    relayPathLabel->setMinimumWidth(82);
     relayPathLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    relayPathLabel->setEnabled(false);
     relayPathLayout->addWidget(relayPathLabel);
 
-    m_relayPath = new QLineEdit(optionsGroup);
-    m_relayPath->setPlaceholderText(QStringLiteral("voxl1"));  // P1: 레거시 placeholder
-    m_relayPath->setEnabled(false);  // 기능 불변: useRelay는 channels.json으로 적용
-    m_relayPath->setToolTip(QStringLiteral("relay는 채널 설정(useRelay)으로 적용됩니다"));
+    // 경로는 채널 ID로 자동 — 입력칸이 아니라 안내 라벨로 표시(혼란 방지).
+    m_relayPath = new QLabel(QStringLiteral("rtsp://127.0.0.1:8554/<채널ID> (자동)"), optionsGroup);
+    m_relayPath->setStyleSheet(QStringLiteral("color:#666; background:transparent;"));
+    m_relayPath->setToolTip(QStringLiteral("relay 경로는 채널 ID로 자동 지정됩니다."));
     relayPathLayout->addWidget(m_relayPath, 1);
     optionsLayout->addLayout(relayPathLayout);
+
+    // relay 체크 상태에 따라 경로 표시 활성/비활성
+    auto syncRelayUi = [this, relayPathLabel] {
+        const bool on = m_useRelay->isChecked();
+        relayPathLabel->setEnabled(on);
+        m_relayPath->setEnabled(on);
+    };
+    connect(m_useRelay, &QCheckBox::toggled, this, [syncRelayUi](bool) { syncRelayUi(); });
+    syncRelayUi();
 
     m_autoConnect = new QCheckBox(QStringLiteral("자동 연결"), optionsGroup);
     m_autoConnect->setToolTip(QStringLiteral("앱 시작 시 이 채널에 자동으로 연결합니다."));
@@ -165,6 +180,7 @@ ChannelDialog::ChannelDialog(QWidget* parent, const QString& name, const QString
 QString ChannelDialog::name() const { return m_name->text().trimmed(); }
 QString ChannelDialog::url() const { return m_url->text().trimmed(); }
 bool ChannelDialog::autoConnect() const { return m_autoConnect->isChecked(); }
+bool ChannelDialog::useRelay() const { return m_useRelay->isChecked(); }
 
 void ChannelDialog::accept() {
     // U2: 빈 이름 또는 비 RTSP 스킴이면 경고 후 닫지 않음

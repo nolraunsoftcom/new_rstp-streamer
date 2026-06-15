@@ -91,6 +91,7 @@ add_library(nv_ui STATIC
   ui/render/RhiVideoRenderer.cpp
   ui/channels/ChannelDialog.cpp
   ui/channels/ChannelListPanel.cpp
+  ui/channels/ChannelInfoDialog.cpp
   ui/shell/LogPanel.cpp
   ui/panels/FilePanel.cpp
   ui/relay/RelayCoordinator.cpp

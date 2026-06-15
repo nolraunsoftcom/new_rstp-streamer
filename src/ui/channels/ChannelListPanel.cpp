@@ -100,19 +100,27 @@ ChannelListPanel::ChannelListPanel(Callbacks cb, QWidget* parent)
             "QMenu { background-color: #ffffff; color: #1f1f1f; border: 1px solid #c8c8c8; font-size: 12px; }"
             "QMenu::item { padding: 6px 20px; }"
             "QMenu::item:selected { background-color: #dbeafe; }"));
+        auto* actFull = menu.addAction(QStringLiteral("전체화면으로 열기"));
         auto* actEdit = menu.addAction(QStringLiteral("채널 수정"));
         auto* actRetry = menu.addAction(QStringLiteral("재시도"));
         menu.addSeparator();
         auto* actRemove = menu.addAction(QStringLiteral("채널 삭제"));
         auto* chosen = menu.exec(m_list->viewport()->mapToGlobal(pos));
-        if (chosen == actEdit) m_cb.editRequested(id);
+        if (chosen == actFull) { if (m_cb.fullscreenRequested) m_cb.fullscreenRequested(id); }
+        else if (chosen == actEdit) m_cb.editRequested(id);
         else if (chosen == actRetry) m_cb.retryRequested(id);
         else if (chosen == actRemove) {
             // U1: 삭제 확인 다이얼로그 (F5: confirmDelete 헬퍼)
             const QString chName = QString::fromStdString(
                 m_configs[static_cast<size_t>(row)].name);
-            if (nv::ui::confirmDelete(this, chName)) m_cb.removeRequested(id);
+            if (nv::ui::confirmDelete(window(), chName)) m_cb.removeRequested(id);
         }
+    });
+    // 더블클릭 → 전체화면 탭
+    connect(m_list, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        if (!item || !m_cb.fullscreenRequested) return;
+        const std::string id = item->data(Qt::UserRole).toString().toStdString();
+        if (!id.empty()) m_cb.fullscreenRequested(id);
     });
     bodyLayout->addWidget(m_list, 1);
 
@@ -135,7 +143,7 @@ ChannelListPanel::ChannelListPanel(Callbacks cb, QWidget* parent)
             // U1: 삭제 확인 다이얼로그 (F5: confirmDelete 헬퍼)
             const QString chName = QString::fromStdString(
                 m_configs[static_cast<size_t>(row)].name);
-            if (nv::ui::confirmDelete(this, chName))
+            if (nv::ui::confirmDelete(window(), chName))
                 m_cb.removeRequested(m_configs[static_cast<size_t>(row)].id);
         }
     });

@@ -21,6 +21,8 @@ public:
         std::function<void(std::string id)> retryRequested;
         // DnD 재배열: 새 표시 순서의 id 목록(위→아래). 비어있으면 DnD 무동작.
         std::function<void(std::vector<std::string> order)> reorderRequested;
+        // 더블클릭/우클릭 → 전체화면 탭 열기
+        std::function<void(std::string id)> fullscreenRequested;
     };
 
     explicit ChannelListPanel(Callbacks cb, QWidget* parent = nullptr);

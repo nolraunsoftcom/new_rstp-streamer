@@ -28,6 +28,17 @@ TEST_CASE("RelaySupervisor: ensureUp = 생성→검증→기록→기동요청")
     CHECK(svc.lastConfigPath == "/tmp/mediamtx.yml");
 }
 
+TEST_CASE("RelaySupervisor: restart = stop 후 재기동(self-heal)") {
+    FakeRelayServiceManager svc;
+    FakeRelayControlApi api;
+    FakeLogger log;
+    RelaySupervisor sup(svc, api, log, [](auto&, auto&) { return true; });
+    REQUIRE(sup.restart(oneRelay(), "/tmp/mediamtx.yml"));
+    CHECK(svc.stopCalls == 1);              // 먼저 완전 정리(bootout)
+    CHECK(svc.ensureRunningCalls == 1);     // 그 다음 재기동
+    CHECK(svc.lastConfigPath == "/tmp/mediamtx.yml");
+}
+
 TEST_CASE("RelaySupervisor: writer 실패 시 서비스 기동 안 함") {
     FakeRelayServiceManager svc;
     FakeRelayControlApi api;

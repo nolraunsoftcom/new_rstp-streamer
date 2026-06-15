@@ -39,6 +39,7 @@ Q_DECLARE_METATYPE(nv::domain::RecordingState)
 #include "src/infra/video/VtMetalBridge.h"  // M2c Task2 컴파일/링크 확인용(호출은 Task3). 헤더만 참조.
 #include "src/ui/channels/ChannelListPanel.h"
 #include "src/ui/grid/GridView.h"
+#include "src/ui/grid/VideoTileWidget.h"
 #include "src/ui/relay/RelayCoordinator.h"
 #include "src/ui/shell/ControlBridge.h"
 #include "src/ui/shell/RepaintClock.h"
@@ -141,6 +142,12 @@ int main(int argc, char** argv) {
     gridCb.moveRequested = [&](std::string id, int targetGridIndex) {
         executor.post([&, id, targetGridIndex] { mgr.moveGrid(id, targetGridIndex); });
     };
+    gridCb.fullscreenRequested = [&](std::string id) {
+        if (winPtr != nullptr) winPtr->openFullscreenTab(id);
+    };
+    gridCb.infoRequested = [&](std::string id) {
+        if (winPtr != nullptr) winPtr->openChannelInfo(id);
+    };
     gridCb.editRequested = [&](std::string id) {
         if (winPtr != nullptr) winPtr->openEditDialog(id);
     };
@@ -195,26 +202,38 @@ int main(int argc, char** argv) {
     panelCb.reorderRequested = [&](std::vector<std::string> order) {
         executor.post([&, order = std::move(order)] { mgr.reorderList(order); });
     };
+    panelCb.fullscreenRequested = [&](std::string id) {
+        if (winPtr != nullptr) winPtr->openFullscreenTab(id);
+    };
     auto* channelPanel = new nv::ui::ChannelListPanel(panelCb);
 
     // MainWindow commands
     nv::ui::MainWindow::Commands winCmds;
-    winCmds.addChannel = [&](std::string n, std::string u, bool ac) {
-        executor.post([&, n = std::move(n), u = std::move(u), ac] {
-            const auto id = mgr.addChannel(n, u, ac);
+    winCmds.addChannel = [&](std::string n, std::string u, bool ac, bool relay) {
+        executor.post([&, n = std::move(n), u = std::move(u), ac, relay] {
+            const auto id = mgr.addChannel(n, u, ac, relay);
             if (!id.empty()) {
                 if (auto* c = mgr.controller(id)) c->connect();
             }
         });
     };
-    winCmds.updateChannel = [&](std::string id, std::string n, std::string u, bool ac) {
-        executor.post([&, id, n = std::move(n), u = std::move(u), ac] {
-            mgr.updateChannel(id, n, u, ac);
+    winCmds.updateChannel = [&](std::string id, std::string n, std::string u, bool ac, bool relay) {
+        executor.post([&, id, n = std::move(n), u = std::move(u), ac, relay] {
+            mgr.updateChannel(id, n, u, ac, relay);
         });
     };
     winCmds.removeChannel = gridCb.removeRequested;
     winCmds.retryChannel = gridCb.retryRequested;
     winCmds.framePainted = gridCb.framePainted;
+    // 전체화면 탭 영상 위젯 팩토리 — 공유 프레임 레지스트리 기반(2차 스트림 없음).
+    // RepaintClock tick에 pollFrame 연결(그리드 타일과 동일 갱신원). 닫을 때 MainWindow가 삭제.
+    winCmds.makeFullscreenView = [&](std::string id) -> QWidget* {
+        auto* v = new nv::ui::VideoTileWidget(
+            *static_cast<nv::app::IFrameSurfaceRegistry*>(&factory), id, nullptr);
+        QObject::connect(&repaintClock, &nv::ui::RepaintClock::tick,
+                         v, &nv::ui::VideoTileWidget::pollFrame);
+        return v;
+    };
     winCmds.swapChannels = gridCb.swapRequested;
 
     nv::ui::MainWindow win(grid, channelPanel, logPanel, winCmds);
@@ -232,7 +251,7 @@ int main(int argc, char** argv) {
         const auto cfgs = mgr.configs();
         QVector<QString> ids, names, urls;
         QVector<int> gi, li;
-        QVector<bool> ac;
+        QVector<bool> ac, ur;
         for (const auto& c : cfgs) {
             ids.push_back(QString::fromStdString(c.id));
             names.push_back(QString::fromStdString(c.name));
@@ -240,6 +259,7 @@ int main(int argc, char** argv) {
             gi.push_back(c.gridIndex);
             li.push_back(c.listIndex);
             ac.push_back(c.autoConnect);
+            ur.push_back(c.useRelay);
         }
         QMetaObject::invokeMethod(&win, "onChannelList", Qt::QueuedConnection,
                                   Q_ARG(QVector<QString>, ids),
@@ -247,7 +267,8 @@ int main(int argc, char** argv) {
                                   Q_ARG(QVector<QString>, urls),
                                   Q_ARG(QVector<int>, gi),
                                   Q_ARG(QVector<int>, li),
-                                  Q_ARG(QVector<bool>, ac));
+                                  Q_ARG(QVector<bool>, ac),
+                                  Q_ARG(QVector<bool>, ur));
         // #6: relay 모드 채널 목록을 워커 스레드(RelayCoordinator)로 마샬 → config 재생성(멱등).
         if (auto* coord = coordPtr.load()) {
             std::vector<nv::domain::RelayPath> relayCh;
@@ -502,7 +523,10 @@ int main(int argc, char** argv) {
     QThread relayThread;
     nv::ui::RelayCoordinator* relayCoord = nullptr;
 
-    if (!relayChannels.empty() && relaySvc) {
+    // relaySvc 지원 OS면 relay 채널이 0개여도 코디네이터를 띄워둔다 — 런타임에 채널을
+    // relay로 바꾸면 pushList→updateChannels가 그때 ensureUp(mediamtx 기동)한다.
+    // (start()/updateChannels()는 빈 채널이면 ensureUp을 건너뛴다.)
+    if (relaySvc) {
         relaySup.emplace(*relaySvc, relayApi, logger, relayWriter.asCallback());
 
         const std::string relayCfgPath =

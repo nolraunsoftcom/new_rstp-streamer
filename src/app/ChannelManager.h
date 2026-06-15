@@ -27,9 +27,11 @@ public:
                    int maxChannels = kDefaultMaxChannels);
 
     void restore(bool autoConnect);                        // 저장본 로드 (시작 시 1회)
-    std::string addChannel(std::string name, std::string url, bool autoConnect = false);   // 실패(한도) 시 "" 반환
+    std::string addChannel(std::string name, std::string url, bool autoConnect = false,
+                           bool useRelay = false);   // 실패(한도) 시 "" 반환
     void removeChannel(const std::string& id);
-    void updateChannel(const std::string& id, std::string name, std::string url, bool autoConnect = false);
+    void updateChannel(const std::string& id, std::string name, std::string url,
+                       bool autoConnect = false, bool useRelay = false);
     void swapGrid(const std::string& idA, const std::string& idB);   // 그리드 위치 교환(gridIndex만)
     // 그리드 위치 이동(gridIndex만). 대상 셀이 점유면 두 채널 위치 교환, 비면 그대로 이동.
     // 레거시 moveViewerToGridIndex 대응. persist + notifyList.

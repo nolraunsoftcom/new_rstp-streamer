@@ -34,6 +34,10 @@ public:
         // M3-5: 정보바 버튼 콜백
         std::function<void(std::string id)> snapshotRequested;
         std::function<void(std::string id)> recordToggleRequested;
+        // 더블클릭/우클릭 → 전체화면 탭 열기
+        std::function<void(std::string id)> fullscreenRequested;
+        // 우클릭 → 채널 정보 다이얼로그
+        std::function<void(std::string id)> infoRequested;
     };
 
     GridView(nv::app::IFrameSurfaceRegistry* registry, Callbacks cb,
