@@ -46,6 +46,8 @@ public:
     void onFrameDecoded() override;
     void onFramePresented() override;
     void onSourceError(nv::domain::DiagnosisReason reason) override;
+    void onBytesReceived(long long bytes) override;
+    void onFrameDropped() override;
 
 private:
     void apply(const nv::domain::Transition& t);
@@ -68,6 +70,12 @@ private:
     std::optional<std::chrono::steady_clock::time_point> m_lastPacketAt;
     std::chrono::steady_clock::time_point m_lastRateAt{};
     double m_packetsPerSec = 0.0;
+    long long m_bytesInWindow = 0;     // 최근 윈도우 누적 바이트 → bitrate 산출
+    double m_bitrateKbps = 0.0;
+    long long m_droppedFrames = 0;     // 이번 연결 누적 드롭(open에서 0 리셋)
+    long long m_decodedFrames = 0;     // 누적 디코드 프레임
+    long long m_displayedFrames = 0;   // 누적 표시 프레임
+    long long m_readBytesTotal = 0;    // 누적 수신 바이트
 
     bool m_loggedDecoded   = false;  // 사이클당 첫 디코딩 로그 가드
     bool m_loggedPresented = false;  // 사이클당 첫 표시 로그 가드

@@ -47,6 +47,12 @@ private:
         void onSourceError(nv::domain::DiagnosisReason r) override {
             ex.post([self = shared_from_this(), r] { self->real.onSourceError(r); });
         }
+        void onBytesReceived(long long bytes) override {
+            ex.post([self = shared_from_this(), bytes] { self->real.onBytesReceived(bytes); });
+        }
+        void onFrameDropped() override {
+            ex.post([self = shared_from_this()] { self->real.onFrameDropped(); });
+        }
     };
 
     IStreamSource& m_inner;

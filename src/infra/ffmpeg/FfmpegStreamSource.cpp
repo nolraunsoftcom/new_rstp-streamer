@@ -317,7 +317,10 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
             }
             gotKeyframe = true;
         }
-        if (!m_stop) listener->onPacketReceived();
+        if (!m_stop) {
+            listener->onPacketReceived();
+            listener->onBytesReceived(pkt->size);   // 상태바 bitrate 산출용
+        }
 
         // ── 패킷 fan-out (M3 Task3) ──────────────────────────────────────────
         // 디코더에 보내기 전에 레코더에도 같은 패킷을 전달한다(화면=녹화 일치).
@@ -376,6 +379,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
                     //     av_frame_unref(frm)로 CVPixelBuffer 수명이 코덱 내부에서 관리된다.
                     //     (이 함수는 핸들을 별도 retain하지 않으므로 누수 없음.)
                     // ────────────────────────────────────────────────────────────────────
+                    if (!m_stop) listener->onFrameDropped();   // 상태바 Dropped 카운트
                     av_frame_unref(frm);
                     continue;
                 }

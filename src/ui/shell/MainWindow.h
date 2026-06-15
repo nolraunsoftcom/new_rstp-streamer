@@ -59,7 +59,10 @@ public slots:
                        QVector<int> gridIndexes, QVector<int> listIndexes,
                        QVector<bool> autoConnects, QVector<bool> useRelays);
     void onSnapshot(QString channelId, QString state, int attempts, QList<int> stages,
-                    double pps, qlonglong msSinceLastPacket, QString reason);
+                    double pps, qlonglong msSinceLastPacket, QString reason,
+                    double bitrateKbps, qlonglong droppedFrames,
+                    qlonglong decodedFrames, qlonglong displayedFrames,
+                    qlonglong readBytesTotal);
     // M3-5: 녹화 상태 변경 → 그리드 타일 버튼 + 파일 패널 갱신
     void onRecordingState(QString channelId, nv::domain::RecordingState state);
     // P3: 토스트 트리거 슬롯 — control→UI queued 호출 (기존 이벤트 흐름 재사용)
@@ -107,6 +110,13 @@ private:
 
     // A1: 채널별 Streaming 여부 추적 (상태바 경보용)
     QMap<QString, bool> m_streaming;
+    // 상태바/채널정보 집계용 채널별 최신 지표 (onSnapshot에서 갱신)
+    QMap<QString, double> m_pps;          // 채널별 packets/sec(≈fps)
+    QMap<QString, double> m_bitrateKbps;  // 채널별 비트레이트
+    QMap<QString, qlonglong> m_dropped;   // 채널별 누적 드롭
+    QMap<QString, qlonglong> m_decoded;   // 채널별 누적 디코드
+    QMap<QString, qlonglong> m_displayed; // 채널별 누적 표시
+    QMap<QString, qlonglong> m_readBytes; // 채널별 누적 수신 바이트
     // 채널별 녹화 상태 — 전체화면 탭 녹화 표시 prime용(탭 열 때 현재 상태 반영).
     QMap<QString, nv::domain::RecordingState> m_recStates;
     // 전체화면 탭 라벨의 녹화 ● 표시 갱신(없으면 무동작).

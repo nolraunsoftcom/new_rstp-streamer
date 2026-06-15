@@ -262,11 +262,12 @@ MainWindow::MainWindow(GridView* grid, ChannelListPanel* channelPanel, LogPanel*
     auto* statusLayout = new QHBoxLayout(statusWidget);
     statusLayout->setContentsMargins(8, 0, 8, 0);
     statusLayout->setSpacing(16);
-    m_statusChannels = new QLabel(QStringLiteral("채널 0 / 전체 0"), statusWidget);
-    m_statusChannels->setStyleSheet(QStringLiteral("color: #444; font-size: 11px;"));
-    m_statusCpu = new QLabel(QStringLiteral("CPU —"), statusWidget);
+    m_statusChannels = new QLabel(
+        QStringLiteral("Connected: 0/0 | Bitrate: 0.0 Mbps | FPS: 0.0 | Dropped: 0"), statusWidget);
+    m_statusChannels->setStyleSheet(QStringLiteral("color: #222; font-size: 11px;"));
+    m_statusCpu = new QLabel(QStringLiteral("PC CPU: --"), statusWidget);
     m_statusCpu->setStyleSheet(QStringLiteral("color: #444; font-size: 11px;"));
-    m_statusMem = new QLabel(QStringLiteral("메모리 —"), statusWidget);
+    m_statusMem = new QLabel(QStringLiteral("PC RAM: --"), statusWidget);
     m_statusMem->setStyleSheet(QStringLiteral("color: #444; font-size: 11px;"));
     statusLayout->addWidget(m_statusChannels);
     statusLayout->addStretch();
@@ -286,13 +287,13 @@ MainWindow::MainWindow(GridView* grid, ChannelListPanel* channelPanel, LogPanel*
     connect(resTimer, &QTimer::timeout, this, [this] {
         const auto snap = m_resourceMonitor->sample();
         if (snap.systemCpuValid)
-            m_statusCpu->setText(QStringLiteral("CPU %1%").arg(snap.systemCpuPercent, 0, 'f', 1));
+            m_statusCpu->setText(QStringLiteral("PC CPU: %1%").arg(snap.systemCpuPercent, 0, 'f', 1));
         if (snap.systemMemoryValid && snap.systemMemoryTotalBytes > 0) {
             const double usedGb = snap.systemMemoryUsedBytes / (1024.0 * 1024.0 * 1024.0);
             const double totalGb = snap.systemMemoryTotalBytes / (1024.0 * 1024.0 * 1024.0);
-            m_statusMem->setText(QStringLiteral("메모리 %1/%2 GB")
-                                     .arg(usedGb, 0, 'f', 1)
-                                     .arg(totalGb, 0, 'f', 1));
+            m_statusMem->setText(QStringLiteral("PC RAM: %1 / %2 GB")
+                                     .arg(usedGb, 0, 'f', 2)
+                                     .arg(totalGb, 0, 'f', 2));
         }
     });
     resTimer->start(1000);
@@ -350,36 +351,54 @@ void MainWindow::rebuildGrid() {
 }
 
 void MainWindow::onSnapshot(QString channelId, QString state, int attempts, QList<int> stages,
-                            double pps, qlonglong msSinceLastPacket, QString reason) {
+                            double pps, qlonglong msSinceLastPacket, QString reason,
+                            double bitrateKbps, qlonglong droppedFrames,
+                            qlonglong decodedFrames, qlonglong displayedFrames,
+                            qlonglong readBytesTotal) {
     m_grid->updateTileStatus(channelId, state, attempts, stages, pps, msSinceLastPacket, reason);
     m_channelPanel->updateStatus(channelId, state, reason);
     // A1: Streaming 여부 맵 갱신
     m_streaming[channelId] = (state == QStringLiteral("Streaming"));
+    // 상태바/채널정보 집계용 채널별 지표 캐시
+    m_pps[channelId]         = pps;
+    m_bitrateKbps[channelId] = bitrateKbps;
+    m_dropped[channelId]     = droppedFrames;
+    m_decoded[channelId]     = decodedFrames;
+    m_displayed[channelId]   = displayedFrames;
+    m_readBytes[channelId]   = readBytesTotal;
     updateStatusBar();
 }
 
 void MainWindow::updateStatusBar() {
+    // 레거시 StatusBar::updateStats 미러: Connected | Bitrate(평균 Mbps) | FPS(평균) | Dropped(합)
     const int total = static_cast<int>(m_channels.size());
-    int streaming = 0;
-    for (bool v : m_streaming)
-        if (v) ++streaming;
-
-    if (total == 0) {
-        m_statusChannels->setText(QStringLiteral("전체 0 채널"));
-        m_statusChannels->setStyleSheet(QStringLiteral("color: #444; font-size: 11px;"));
-        return;
+    int connected = 0;
+    double sumBitrateKbps = 0.0;
+    double sumFps = 0.0;
+    qlonglong sumDropped = 0;
+    for (const auto& c : m_channels) {
+        const QString id = QString::fromStdString(c.id);
+        if (!m_streaming.value(id, false)) continue;
+        ++connected;
+        sumBitrateKbps += m_bitrateKbps.value(id, 0.0);
+        sumFps         += m_pps.value(id, 0.0);
+        sumDropped     += m_dropped.value(id, 0);
     }
+    const double avgMbps = connected > 0 ? sumBitrateKbps / connected / 1000.0 : 0.0;
+    const double avgFps  = connected > 0 ? sumFps / connected : 0.0;
 
-    const QString text = (streaming == 0)
-        ? QStringLiteral("연결 %1 / 전체 %2 ⚠ 전 채널 끊김").arg(streaming).arg(total)
-        : QStringLiteral("연결 %1 / 전체 %2").arg(streaming).arg(total);
+    const QString text = QStringLiteral("Connected: %1/%2 | Bitrate: %3 Mbps | FPS: %4 | Dropped: %5")
+        .arg(connected).arg(total)
+        .arg(avgMbps, 0, 'f', 1)
+        .arg(avgFps, 0, 'f', 1)
+        .arg(sumDropped);
 
-    const QString style = (streaming == 0)
-        ? QStringLiteral("color: #d13438; font-weight: bold; font-size: 11px;")
-        : QStringLiteral("color: #444; font-size: 11px;");
-
+    // 전 채널 끊김 경보: 채널이 있는데 연결 0이면 빨강 강조
+    const bool alarm = (total > 0 && connected == 0);
     m_statusChannels->setText(text);
-    m_statusChannels->setStyleSheet(style);
+    m_statusChannels->setStyleSheet(alarm
+        ? QStringLiteral("color: #d13438; font-weight: bold; font-size: 11px;")
+        : QStringLiteral("color: #222; font-size: 11px;"));
 }
 
 void MainWindow::openAddDialog() {
@@ -584,10 +603,21 @@ void MainWindow::openChannelInfo(const std::string& id)
     if (cfg == nullptr) return;
 
     const QString qid = QString::fromStdString(id);
-    const bool streaming = m_streaming.value(qid, false);
-    const auto recState = m_recStates.value(qid, nv::domain::RecordingState::Idle);
+    // 라이브 통계 provider — 다이얼로그가 1초마다 호출. this/qid 캡처는 다이얼로그가
+    // this의 자식(WA_DeleteOnClose)이라 수명 안전.
+    auto provider = [this, qid]() -> ChannelInfoDialog::Stats {
+        ChannelInfoDialog::Stats s;
+        s.streaming        = m_streaming.value(qid, false);
+        s.outputFps        = m_pps.value(qid, 0.0);
+        s.bitrateKbps      = m_bitrateKbps.value(qid, 0.0);
+        s.droppedFrames    = m_dropped.value(qid, 0);
+        s.decodedFrames    = m_decoded.value(qid, 0);
+        s.displayedFrames  = m_displayed.value(qid, 0);
+        s.readBytesTotal   = m_readBytes.value(qid, 0);
+        return s;
+    };
 
-    auto* dlg = new ChannelInfoDialog(*cfg, streaming, recState, this);
+    auto* dlg = new ChannelInfoDialog(*cfg, std::move(provider), this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }

@@ -15,6 +15,10 @@ public:
     virtual void onFrameDecoded() = 0;
     virtual void onFramePresented() = 0;
     virtual void onSourceError(nv::domain::DiagnosisReason reason) = 0;
+    // 상태바 지표용(비순수 — 기존 구현체/테스트 무영향). bytes=수신 패킷 크기.
+    virtual void onBytesReceived(long long /*bytes*/) {}
+    // 디코드/HW전송 실패로 프레임을 표시하지 못함(드롭). 기본 no-op.
+    virtual void onFrameDropped() {}
 };
 
 class IStreamSource {
