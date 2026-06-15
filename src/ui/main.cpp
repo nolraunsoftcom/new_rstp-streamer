@@ -15,8 +15,10 @@
 #include <optional>
 #include <string>
 #include <vector>
-#include <sys/socket.h>
+#if !defined(_WIN32)
+#include <sys/socket.h>   // Unix 시그널→Qt 브리지(socketpair self-pipe). Windows는 미사용.
 #include <unistd.h>
+#endif
 #include "src/app/ChannelManager.h"
 #include "src/app/RecordingController.h"
 #include "src/app/RelaySupervisor.h"
@@ -49,11 +51,13 @@ Q_DECLARE_METATYPE(nv::domain::RecordingState)
 using namespace std::chrono_literals;
 
 namespace {
+#if !defined(_WIN32)
 int g_sigFd[2] = {-1, -1};
 void onUnixSignal(int) {
     const char b = 1;
     (void)::write(g_sigFd[0], &b, 1);
 }
+#endif
 } // namespace
 
 int main(int argc, char** argv) {
@@ -388,7 +392,9 @@ int main(int argc, char** argv) {
         });
     });
 
-    // --- 시그널/종료 ---
+    // --- 시그널/종료 (Unix만: socketpair self-pipe로 SIGINT/SIGTERM을 Qt 루프에 전달) ---
+    // Windows는 콘솔 시그널 모델이 달라 미사용 — GUI 창 종료로 정상 종료.
+#if !defined(_WIN32)
     ::socketpair(AF_UNIX, SOCK_STREAM, 0, g_sigFd);
     std::signal(SIGINT, onUnixSignal);
     std::signal(SIGTERM, onUnixSignal);
@@ -398,6 +404,7 @@ int main(int argc, char** argv) {
         (void)::read(g_sigFd[1], &b, 1);
         QApplication::quit();
     });
+#endif
 
     win.show();
 
