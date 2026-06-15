@@ -81,9 +81,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # FFmpeg 빌드 결과(.zip)를 CI 실행 간 보존 — 2회차부터 19분 재빌드 생략
-      - name: vcpkg binary cache
-        uses: actions/cache@v4
+      # FFmpeg 빌드 결과(.zip)를 CI 실행 간 보존 — restore/save 분리(아래 Save 스텝이 if:always()라
+      # 빌드/컴파일이 실패해도 FFmpeg 캐시를 저장한다. 통합 actions/cache는 잡 실패 시 저장 안 함.
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}\vcpkg-bincache
           key: vcpkg-win-${{ hashFiles('vcpkg.json') }}
@@ -139,6 +141,14 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-windows `
             -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
         shell: pwsh
+
+      # configure 중 vcpkg가 FFmpeg를 빌드한다 → 그 직후 저장(빌드/컴파일 실패와 무관하게).
+      - name: Save vcpkg binary cache
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-bincache
+          key: vcpkg-win-${{ hashFiles('vcpkg.json') }}
 
       - name: Build
         run: cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
