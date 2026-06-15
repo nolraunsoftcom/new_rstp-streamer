@@ -3,7 +3,7 @@ add_library(nv_domain STATIC
   domain/relay/RelayConfig.cpp
 )
 target_include_directories(nv_domain PUBLIC ${CMAKE_SOURCE_DIR})
-target_compile_options(nv_domain PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(nv_domain PRIVATE ${NV_WARNING_FLAGS})
 
 add_library(nv_app STATIC
   app/ChannelController.cpp
@@ -14,7 +14,7 @@ add_library(nv_app STATIC
 )
 target_include_directories(nv_app PUBLIC ${CMAKE_SOURCE_DIR})
 target_link_libraries(nv_app PUBLIC nv_domain)
-target_compile_options(nv_app PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(nv_app PRIVATE ${NV_WARNING_FLAGS})
 
 # ── FFmpeg 탐색 ──────────────────────────────────────────────────────────────
 # Windows: vcpkg 툴체인이 find_package(FFMPEG) 경로를 주입한다.
@@ -51,7 +51,7 @@ add_library(nv_infra STATIC
   infra/system/ResourceMonitor.cpp
 )
 target_include_directories(nv_infra PUBLIC ${CMAKE_SOURCE_DIR})
-target_compile_options(nv_infra PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(nv_infra PRIVATE ${NV_WARNING_FLAGS})
 
 if(WIN32)
   # Windows/vcpkg: FFMPEG_INCLUDE_DIRS + FFMPEG_LIBRARIES (FindFFMPEG.cmake 변수).
@@ -137,7 +137,7 @@ else()
   target_link_libraries(nv_ui PUBLIC Qt6::Gui)
   message(STATUS "Qt6::GuiPrivate 없음(aqt) → private include 수동 추가 완료")
 endif()
-target_compile_options(nv_ui PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(nv_ui PRIVATE ${NV_WARNING_FLAGS})
 
 # QRhiWidget 셰이더 — qsb 컴파일 후 :/shaders/*.qsb 로 노출 (RhiVideoRenderer가 QFile 로드).
 qt6_add_shaders(nv_ui "nv_ui_shaders"

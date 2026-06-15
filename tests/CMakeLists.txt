@@ -35,7 +35,7 @@ add_executable(nv_unit_tests
 )
 target_include_directories(nv_unit_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(nv_unit_tests PRIVATE nv_domain nv_app nv_infra Catch2::Catch2WithMain Qt6::Core)
-target_compile_options(nv_unit_tests PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(nv_unit_tests PRIVATE ${NV_WARNING_FLAGS})
 # FfmpegRecorderTest가 fixture 경로 기본값으로 사용 (NV_FIXTURE_DIR로 오버라이드 가능).
 target_compile_definitions(nv_unit_tests PRIVATE PROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
@@ -53,7 +53,7 @@ add_executable(nv_ui_tests
 )
 target_include_directories(nv_ui_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(nv_ui_tests PRIVATE nv_ui Catch2::Catch2WithMain Qt6::Widgets Qt6::Test)
-target_compile_options(nv_ui_tests PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(nv_ui_tests PRIVATE ${NV_WARNING_FLAGS})
 target_compile_definitions(nv_ui_tests PRIVATE QT_QPA_PLATFORM=offscreen)
 catch_discover_tests(nv_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
