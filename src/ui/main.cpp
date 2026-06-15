@@ -58,6 +58,24 @@ void onUnixSignal(int) {
     (void)::write(g_sigFd[0], &b, 1);
 }
 #endif
+
+// 슬롯/이벤트 처리(메인 스레드)에서 예외가 이벤트루프로 새면 Qt가 곧장 std::terminate
+// (Windows 0xc0000409)시킨다. notify()를 감싸 예외를 잡고 로그로 남겨 앱을 살린다.
+// 무엇이 던져졌는지 stderr에 찍히므로 근본 원인 추적도 가능.
+class SafeApplication : public QApplication {
+public:
+    using QApplication::QApplication;
+    bool notify(QObject* receiver, QEvent* event) override {
+        try {
+            return QApplication::notify(receiver, event);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[notify] uncaught exception: %s\n", e.what());
+        } catch (...) {
+            std::fprintf(stderr, "[notify] uncaught exception (unknown)\n");
+        }
+        return false;
+    }
+};
 } // namespace
 
 int main(int argc, char** argv) {
@@ -68,7 +86,7 @@ int main(int argc, char** argv) {
     if (!qEnvironmentVariableIsSet("QT_WIDGETS_RHI")) {
         qputenv("QT_WIDGETS_RHI", "1");
     }
-    QApplication app(argc, argv);
+    SafeApplication app(argc, argv);   // notify() 예외 가드 (메인 스레드 terminate 방지)
     // P4d: RecordingState를 Qt 메타타입으로 등록 — QueuedConnection Q_ARG 전달에 필요
     qRegisterMetaType<nv::domain::RecordingState>("nv::domain::RecordingState");
     app.setApplicationName(QStringLiteral("영상관리시스템"));
