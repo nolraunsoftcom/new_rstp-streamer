@@ -1,6 +1,8 @@
 #include "src/ui/relay/RelayCoordinator.h"
 #include <QTimer>
 #include <algorithm>
+#include <cstdio>
+#include <exception>
 #include <utility>
 #include "src/domain/health/DiagnosisReason.h"
 
@@ -23,14 +25,22 @@ RelayCoordinator::RelayCoordinator(nv::app::RelaySupervisor& sup,
 // 이제 UI 스레드가 아니라 워커 스레드에서 일어난다. 폴타이머는 여기서 생성해야 워커 스레드에
 // affinity를 가진다(timeout→poll이 워커 이벤트루프에서 실행됨).
 void RelayCoordinator::start() {
-    // relay 채널이 하나도 없으면 mediamtx를 띄우지 않는다(불필요한 기동·macOS 로컬네트워크
-    // 권한 프롬프트 방지). 런타임에 첫 relay 채널이 생기면 updateChannels에서 ensureUp 한다.
-    if (!m_channels.empty())
-        m_sup.ensureUp(m_channels, m_configPath);
-    m_timer = new QTimer(this);
-    m_timer->setInterval(m_intervalMs);
-    connect(m_timer, &QTimer::timeout, this, &RelayCoordinator::poll);
-    m_timer->start();
+    // started 시그널의 직접 호출이라 QApplication::notify 예외 가드 밖이다. 워커 스레드
+    // 진입점이므로 여기서 예외를 잡지 않으면 std::terminate(0xc0000409)로 앱이 죽는다.
+    try {
+        // relay 채널이 하나도 없으면 mediamtx를 띄우지 않는다(불필요한 기동·macOS 로컬네트워크
+        // 권한 프롬프트 방지). 런타임에 첫 relay 채널이 생기면 updateChannels에서 ensureUp 한다.
+        if (!m_channels.empty())
+            m_sup.ensureUp(m_channels, m_configPath);
+        m_timer = new QTimer(this);
+        m_timer->setInterval(m_intervalMs);
+        connect(m_timer, &QTimer::timeout, this, &RelayCoordinator::poll);
+        m_timer->start();
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "[RelayCoordinator::start] threw: %s\n", e.what());
+    } catch (...) {
+        std::fprintf(stderr, "[RelayCoordinator::start] threw (unknown)\n");
+    }
 }
 
 // 워커 스레드의 이벤트루프에서 실행. pollHealth의 QNetworkAccessManager+QEventLoop가

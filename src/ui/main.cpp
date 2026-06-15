@@ -102,6 +102,24 @@ int main(int argc, char** argv) {
     nv::infra::CompositeLogger logger;
     const QString cfgDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
     QDir().mkpath(cfgDir);
+
+    // 진단: stderr를 로그 파일(<AppConfig>/logs/app.log)로 리다이렉트.
+    // 콘솔 없는 GUI 빌드라 `2> file`이 불안정 → 앱이 직접 파일로 남긴다. 우리 예외 가드,
+    // Qt 경고, FFmpeg av_log, CRT 종료 메시지가 모두 기록되고, stderr는 unbuffered라
+    // 크래시 직전 메시지도 보존된다. 한글 경로 대응: Windows는 _wfreopen(wide path).
+    {
+        const QString diagDir = cfgDir + QStringLiteral("/logs");
+        QDir().mkpath(diagDir);
+        const QString logFile = diagDir + QStringLiteral("/app.log");
+#if defined(_WIN32)
+        _wfreopen(reinterpret_cast<const wchar_t*>(logFile.utf16()), L"a", stderr);
+#else
+        (void)!freopen(logFile.toUtf8().constData(), "a", stderr);
+#endif
+        std::fprintf(stderr, "\n=== new_viewer start (build %s %s) ===\n", __DATE__, __TIME__);
+        std::fflush(stderr);
+    }
+
     nv::infra::JsonChannelRepository repo((cfgDir + QStringLiteral("/channels.json")).toStdString());
 
     // --- control 스레드 + 채널 매니저 ---
