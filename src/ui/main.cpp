@@ -103,25 +103,22 @@ int main(int argc, char** argv) {
     const QString cfgDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
     QDir().mkpath(cfgDir);
 
-    // 진단: stderr를 로그 파일(<AppConfig>/logs/app.log)로 리다이렉트.
-    // 콘솔 없는 GUI 빌드라 `2> file`이 불안정 → 앱이 직접 파일로 남긴다. 우리 예외 가드,
-    // Qt 경고, FFmpeg av_log, CRT 종료 메시지가 모두 기록되고, stderr는 unbuffered라
-    // 크래시 직전 메시지도 보존된다. 한글 경로 대응: Windows는 _wfreopen(wide path).
+    // 진단: stderr를 로그 파일(<AppConfig>/logs/app.log)로 리다이렉트 — Windows 전용.
+    // 콘솔 없는 GUI 빌드라 `2> file`이 불안정 → 앱이 직접 파일로 남긴다. 예외 가드/Qt 경고/
+    // FFmpeg av_log/CRT 종료 메시지가 unbuffered로 즉시 기록(크래시 직전까지 보존).
+    // macOS는 stderr를 그대로 둔다 — QA 스트레스 스크립트가 stderr를 viewer.log로 받아
+    // 판정을 파싱하므로 여기서 빼돌리면 안 된다.
+#if defined(_WIN32)
     {
         const QString diagDir = cfgDir + QStringLiteral("/logs");
         QDir().mkpath(diagDir);
         const QString logFile = diagDir + QStringLiteral("/app.log");
-#if defined(_WIN32)
         _wfreopen(reinterpret_cast<const wchar_t*>(logFile.utf16()), L"a", stderr);
-#else
-        (void)!freopen(logFile.toUtf8().constData(), "a", stderr);
-#endif
-        // 파일로 바뀐 stderr는 기본 블록버퍼링 → 크래시 시 마지막 버퍼 유실. unbuffered로
-        // 강제해 모든 줄이 즉시 디스크에 남게 한다(크래시 직전 마지막 동작 보존).
-        std::setvbuf(stderr, nullptr, _IONBF, 0);
+        std::setvbuf(stderr, nullptr, _IONBF, 0);   // unbuffered → 마지막 줄 보존
         std::fprintf(stderr, "\n=== new_viewer start (build %s %s) ===\n", __DATE__, __TIME__);
         std::fflush(stderr);
     }
+#endif
 
     nv::infra::JsonChannelRepository repo((cfgDir + QStringLiteral("/channels.json")).toStdString());
 
