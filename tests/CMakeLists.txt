@@ -46,7 +46,13 @@ endif()
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(CTest)
 include(Catch)
-catch_discover_tests(nv_unit_tests PROPERTIES SKIP_RETURN_CODE 4)
+# Windows: catch_discover_tests는 한글 테스트명을 --filter 인자로 재전달하는데 argv가 ANSI
+# 코드페이지로 깨져 매칭 실패("No test cases matched"). 전체 스위트를 1개 ctest로 등록(필터 없음).
+if(WIN32)
+  add_test(NAME nv_unit_tests COMMAND nv_unit_tests)
+else()
+  catch_discover_tests(nv_unit_tests PROPERTIES SKIP_RETURN_CODE 4)
+endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Test Network)
 
@@ -59,7 +65,12 @@ target_include_directories(nv_ui_tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRE
 target_link_libraries(nv_ui_tests PRIVATE nv_ui Catch2::Catch2WithMain Qt6::Widgets Qt6::Test)
 target_compile_options(nv_ui_tests PRIVATE ${NV_WARNING_FLAGS})
 target_compile_definitions(nv_ui_tests PRIVATE QT_QPA_PLATFORM=offscreen)
-catch_discover_tests(nv_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+if(WIN32)
+  add_test(NAME nv_ui_tests COMMAND nv_ui_tests)
+  set_tests_properties(nv_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+else()
+  catch_discover_tests(nv_ui_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
 
 # 통합테스트는 POSIX(harness.h의 sys/wait.h, fork)·launchd 의존이라 비-Windows 전용.
 # (CI는 어차피 -LE integration으로 실행 제외 — Windows는 빌드 자체를 제외)
