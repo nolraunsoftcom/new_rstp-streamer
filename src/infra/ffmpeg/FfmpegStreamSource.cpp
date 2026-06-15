@@ -238,6 +238,7 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
   // 디코드 스레드 경계: 예외가 스레드 밖으로 새면 std::terminate(0xc0000409)로 앱이 죽는다.
   // 잘못된 채널/손상 스트림에서도 앱을 죽이지 않고 에러로 보고하도록 경계에서 잡는다.
   try {
+    std::fprintf(stderr, "[ffsrc] run() enter url=%s\n", url.c_str());
     AVFormatContext* fmt = avformat_alloc_context();
     fmt->interrupt_callback.callback = &FfmpegStreamSource::interruptCb;
     fmt->interrupt_callback.opaque = this;
@@ -248,7 +249,9 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
     av_dict_set(&opts, "timeout", "5000000", 0);      // 소켓 타임아웃 5s(us) — FFmpeg 5+
     av_dict_set(&opts, "stimeout", "5000000", 0);     // 구버전 옵션명 (무시돼도 무해)
 
+    std::fprintf(stderr, "[ffsrc] avformat_open_input start\n");
     int rc = avformat_open_input(&fmt, url.c_str(), nullptr, &opts);
+    std::fprintf(stderr, "[ffsrc] avformat_open_input rc=%d\n", rc);
     av_dict_free(&opts);
     if (rc < 0) {                              // 실패 시 fmt는 FFmpeg이 해제한다
         if (!m_stop) listener->onSourceError(mapOpenError(rc));

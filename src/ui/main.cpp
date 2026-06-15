@@ -116,6 +116,9 @@ int main(int argc, char** argv) {
 #else
         (void)!freopen(logFile.toUtf8().constData(), "a", stderr);
 #endif
+        // 파일로 바뀐 stderr는 기본 블록버퍼링 → 크래시 시 마지막 버퍼 유실. unbuffered로
+        // 강제해 모든 줄이 즉시 디스크에 남게 한다(크래시 직전 마지막 동작 보존).
+        std::setvbuf(stderr, nullptr, _IONBF, 0);
         std::fprintf(stderr, "\n=== new_viewer start (build %s %s) ===\n", __DATE__, __TIME__);
         std::fflush(stderr);
     }
