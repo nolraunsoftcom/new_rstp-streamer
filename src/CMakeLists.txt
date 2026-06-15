@@ -84,17 +84,20 @@ set(CMAKE_AUTORCC ON)
 
 add_library(nv_ui STATIC
   ui/shell/MainWindow.cpp
+  ui/shell/Toast.cpp
   ui/grid/VideoTileWidget.cpp
   ui/grid/GridView.cpp
   ui/render/SwVideoRenderer.cpp
   ui/render/RhiVideoRenderer.cpp
   ui/channels/ChannelDialog.cpp
   ui/channels/ChannelListPanel.cpp
+  ui/channels/ChannelInfoDialog.cpp
   ui/shell/LogPanel.cpp
   ui/panels/FilePanel.cpp
   ui/relay/RelayCoordinator.cpp
   ui/shell/ControlBridge.h
   ui/shell/RepaintClock.h
+  ui/shell/Toast.h
   ${CMAKE_SOURCE_DIR}/resources/resources.qrc
 )
 target_include_directories(nv_ui PUBLIC ${CMAKE_SOURCE_DIR})

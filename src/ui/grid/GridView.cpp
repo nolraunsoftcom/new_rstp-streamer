@@ -1,32 +1,41 @@
 #include "GridView.h"
 #include <algorithm>
 #include <set>
+#include <QApplication>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMimeData>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QVBoxLayout>
 #include "src/domain/layout/GridRules.h"
+#include "src/domain/recording/RecordingState.h"
 #include "src/ui/grid/VideoTileWidget.h"
 #include "src/ui/common/Confirm.h"
+#include "src/ui/common/Style.h"
 
 namespace nv::ui {
+
+// 그리드 타일 DnD MIME — 페이로드는 드래그 출발 타일의 channelId(UTF-8).
+static const QString kTileDragMime = QStringLiteral("application/x-nv-channel-id");
 
 // ── 레거시 상수 (MainWindow.cpp 기준) ─────────────────────────────────────
 static constexpr int kInfoBarHeight = 28;   // VIEWER_INFO_BAR_HEIGHT
 static constexpr int kGridSpacing   = 1;    // GRID_SPACING
 
-// ── 레거시 Style.h TOOL_BUTTON ────────────────────────────────────────────
-static const QString kToolButton = QStringLiteral(
-    "QPushButton { color: #3a3a3a; background: transparent; border: none; "
-    "padding: 0; margin: 0 2px; font-size: 12px; min-width: 24px; min-height: 20px; }"
-    "QPushButton:hover { color: #0f62fe; }"
-    "QPushButton:disabled { color: #b0b0b0; }");
+// ── 레거시 Style.h TOOL_BUTTON — Style.h 중앙화 상수 사용 ─────────────────
+// nv::ui::style::TOOL_BUTTON 및 TOOL_BUTTON_REC 참조
 
 // ── 상태 → 표시 문구 (레거시 VlcWidget::statusText()) + 색 ──────────────
 static QString statusTextFor(const QString& state) {
@@ -59,6 +68,11 @@ struct GridView::Tile : public QWidget {
     VideoTileWidget* video       = nullptr;
     std::string      channelId;
     QString          name;
+    nv::domain::RecordingState recState{nv::domain::RecordingState::Idle};  // 메뉴 라벨(녹화 시작/중지)용
+
+    // ── DnD(위치 교환) — 타일은 드래그 출발지. 드롭은 GridView(콘텐츠)가 위치 기반 처리. ──
+    QPoint           dragStartPos;            // 좌클릭 누른 지점(드래그 임계 판정용)
+    std::function<void()> onDoubleClick;      // 더블클릭 → 전체화면(GridView가 배선)
 
     Tile(nv::app::IFrameSurfaceRegistry& registry, std::string id, QString nm, QWidget* parent)
         : QWidget(parent), channelId(std::move(id)), name(std::move(nm))
@@ -91,13 +105,13 @@ struct GridView::Tile : public QWidget {
         snapBtn->setFixedSize(24, 20);
         snapBtn->setEnabled(true);
         snapBtn->setToolTip(QStringLiteral("스냅샷 저장"));
-        snapBtn->setStyleSheet(kToolButton);
+        snapBtn->setStyleSheet(nv::ui::style::TOOL_BUTTON);
 
         recBtn = new QPushButton(QStringLiteral("●"), infoBar);
         recBtn->setFixedSize(24, 20);
         recBtn->setEnabled(true);
         recBtn->setToolTip(QStringLiteral("녹화 시작/중지"));
-        recBtn->setStyleSheet(kToolButton);
+        recBtn->setStyleSheet(nv::ui::style::TOOL_BUTTON);
 
         recBadge = new QLabel(QStringLiteral("REC"), infoBar);
         recBadge->setStyleSheet(QStringLiteral(
@@ -124,6 +138,35 @@ struct GridView::Tile : public QWidget {
         mainLay->addWidget(video, 1);
 
         setContextMenuPolicy(Qt::CustomContextMenu);
+
+        // ── DnD: 타일을 드래그 출발지로. 영상 영역(가장 큰 면적)만 마우스 투명 처리해
+        // 그 위의 누름/이동 이벤트가 타일(this)에 도달하게 한다 → 영상에서 드래그 시작.
+        // 정보바는 투명하게 두지 않는다(스냅샷/녹화 버튼 클릭 보존). 정보바 위 컨텍스트 메뉴는
+        // 정보바가 contextMenuEvent를 처리하지 않아 타일로 전파된다. 드롭은 GridView(콘텐츠)가
+        // 위치 기반으로 처리하므로 타일은 setAcceptDrops를 켜지 않는다(빈칸 드롭도 동작). ──
+        video->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    }
+
+    void mousePressEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton) dragStartPos = e->pos();
+        QWidget::mousePressEvent(e);
+    }
+
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (!(e->buttons() & Qt::LeftButton)) { QWidget::mouseMoveEvent(e); return; }
+        if ((e->pos() - dragStartPos).manhattanLength() < QApplication::startDragDistance())
+            return;
+        auto* drag = new QDrag(this);
+        auto* mime = new QMimeData();
+        mime->setData(kTileDragMime, QByteArray::fromStdString(channelId));
+        mime->setText(name);
+        drag->setMimeData(mime);
+        drag->exec(Qt::MoveAction);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton && onDoubleClick) { onDoubleClick(); return; }
+        QWidget::mouseDoubleClickEvent(e);
     }
 };
 
@@ -150,6 +193,78 @@ GridView::GridView(nv::app::IFrameSurfaceRegistry* registry, Callbacks cb,
     m_grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
 
     setWidget(m_content);
+
+    // ── DnD: 콘텐츠에서 위치 기반 드롭 처리(빈칸 이동/점유 교환). 타일은 드래그 출발지. ──
+    m_content->setAcceptDrops(true);
+    m_content->installEventFilter(this);
+    m_dropHighlight = new QWidget(m_content);
+    m_dropHighlight->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_dropHighlight->setStyleSheet(QStringLiteral(
+        "background-color: rgba(0,120,212,40); border: 2px solid #0078d4;"));
+    m_dropHighlight->hide();
+}
+
+int GridView::cellIndexAt(const QPoint& pos) const {
+    const int cols = m_cachedCols;
+    const int cw   = m_cachedCellW;
+    const int ch   = m_cachedCellH;
+    if (cols <= 0 || cw <= 0 || ch <= 0) return -1;
+    if (pos.x() < 0 || pos.y() < 0) return -1;
+    const int strideX = cw + kGridSpacing;
+    const int strideY = ch + kGridSpacing;
+    const int col = pos.x() / strideX;
+    const int row = pos.y() / strideY;
+    if (col >= cols) return -1;
+    return row * cols + col;
+}
+
+bool GridView::eventFilter(QObject* obj, QEvent* ev) {
+    if (obj != m_content) return QScrollArea::eventFilter(obj, ev);
+
+    auto showHighlightAt = [this](int index) {
+        if (!m_dropHighlight || index < 0 || m_cachedCols <= 0) { if (m_dropHighlight) m_dropHighlight->hide(); return; }
+        const int col = index % m_cachedCols;
+        const int row = index / m_cachedCols;
+        const int x = col * (m_cachedCellW + kGridSpacing);
+        const int y = row * (m_cachedCellH + kGridSpacing);
+        m_dropHighlight->setGeometry(x, y, m_cachedCellW, m_cachedCellH);
+        m_dropHighlight->raise();
+        m_dropHighlight->show();
+    };
+
+    switch (ev->type()) {
+    case QEvent::DragEnter: {
+        auto* e = static_cast<QDragEnterEvent*>(ev);
+        if (!e->mimeData()->hasFormat(kTileDragMime)) { e->ignore(); return true; }
+        showHighlightAt(cellIndexAt(e->position().toPoint()));
+        e->acceptProposedAction();
+        return true;
+    }
+    case QEvent::DragMove: {
+        auto* e = static_cast<QDragMoveEvent*>(ev);
+        if (!e->mimeData()->hasFormat(kTileDragMime)) { e->ignore(); return true; }
+        showHighlightAt(cellIndexAt(e->position().toPoint()));
+        e->acceptProposedAction();
+        return true;
+    }
+    case QEvent::DragLeave: {
+        if (m_dropHighlight) m_dropHighlight->hide();
+        return true;
+    }
+    case QEvent::Drop: {
+        auto* e = static_cast<QDropEvent*>(ev);
+        if (m_dropHighlight) m_dropHighlight->hide();
+        const auto src = e->mimeData()->data(kTileDragMime).toStdString();
+        const int index = cellIndexAt(e->position().toPoint());
+        if (src.empty() || index < 0) { e->ignore(); return true; }
+        if (m_cb.moveRequested) m_cb.moveRequested(src, index);
+        e->acceptProposedAction();
+        return true;
+    }
+    default:
+        break;
+    }
+    return QScrollArea::eventFilter(obj, ev);
 }
 
 // ── 레거시 채움 알고리즘 (MainWindow.cpp updateGridCellSizes 직접 이식) ──────
@@ -337,6 +452,11 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
             auto* tile = new Tile(*m_registry, cfg.id, qName, m_content);
             m_tiles[cfg.id] = tile;
 
+            // 더블클릭 → 전체화면 탭
+            tile->onDoubleClick = [this, id = cfg.id] {
+                if (m_cb.fullscreenRequested) m_cb.fullscreenRequested(id);
+            };
+
             // 단일 RepaintClock tick에 pollFrame 연결 (자체 타이머 없음)
             connect(&m_repaintClock, &RepaintClock::tick,
                     tile->video, &VideoTileWidget::pollFrame);
@@ -363,25 +483,43 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
                     "border: 1px solid #c8c8c8; font-size: 12px; }"
                     "QMenu::item { padding: 6px 20px; }"
                     "QMenu::item:selected { background-color: #dbeafe; }"));
+                // 레거시 VlcWidget::showContextMenu 구성 그대로(위치 교환은 DnD로 대체돼 제외).
+                using nv::domain::RecordingState;
+                const bool rec = (tile->recState == RecordingState::Recording ||
+                                  tile->recState == RecordingState::Starting);
+                auto* actFull   = menu.addAction(QStringLiteral("전체화면으로 열기"));
+                auto* actInfo   = menu.addAction(QStringLiteral("채널 정보"));
                 auto* actEdit   = menu.addAction(QStringLiteral("채널 수정"));
-                auto* actRetry  = menu.addAction(QStringLiteral("재시도"));
-                QMenu* swapMenu = menu.addMenu(QStringLiteral("위치 교환"));
-                for (const auto& other : m_lastConfigs) {
-                    if (other.id == tile->channelId) continue;
-                    swapMenu->addAction(QString::fromStdString(other.name))->setData(
-                        QString::fromStdString(other.id));
-                }
+                auto* actSnap   = menu.addAction(QStringLiteral("스냅샷 저장"));
+                auto* actRecord = menu.addAction(rec ? QStringLiteral("녹화 중지")
+                                                     : QStringLiteral("녹화 시작"));
+                menu.addSeparator();
+                auto* actRetry  = menu.addAction(QStringLiteral("재연결"));
+                menu.addSeparator();
                 auto* actRemove = menu.addAction(QStringLiteral("채널 삭제"));
                 auto* chosen    = menu.exec(tile->mapToGlobal(p));
-                if (chosen == actEdit)        m_cb.editRequested(tile->channelId);
+                if (chosen == nullptr) return;
+                if (chosen == actFull) {
+                    if (m_cb.fullscreenRequested) m_cb.fullscreenRequested(tile->channelId);
+                }
+                else if (chosen == actInfo) {
+                    if (m_cb.infoRequested) m_cb.infoRequested(tile->channelId);
+                }
+                else if (chosen == actEdit)   m_cb.editRequested(tile->channelId);
+                else if (chosen == actSnap) {
+                    if (m_cb.snapshotRequested) m_cb.snapshotRequested(tile->channelId);
+                }
+                else if (chosen == actRecord) {
+                    if (m_cb.recordToggleRequested) m_cb.recordToggleRequested(tile->channelId);
+                }
                 else if (chosen == actRetry)  m_cb.retryRequested(tile->channelId);
                 else if (chosen == actRemove) {
                     // U1: 삭제 확인 다이얼로그 (F5: confirmDelete 헬퍼)
-                    if (nv::ui::confirmDelete(tile, tile->name)) m_cb.removeRequested(tile->channelId);
+                    // parent는 최상위 윈도우 — tile(RHI 영상 표면)을 parent로 주면 macOS에서
+                    // 메시지박스가 깨져 렌더된다(리스트 삭제와 동일하게 윈도우 기준으로 띄움).
+                    if (nv::ui::confirmDelete(tile->window(), tile->name))
+                        m_cb.removeRequested(tile->channelId);
                 }
-                else if (chosen != nullptr && !chosen->data().isNull())
-                    m_cb.swapRequested(tile->channelId,
-                                       chosen->data().toString().toStdString());
             });
         }
     }
@@ -454,25 +592,32 @@ void GridView::updateTileStatus(const QString& channelId, const QString& state, 
     }
 }
 
-void GridView::updateRecordingState(const QString& channelId, bool recording)
+void GridView::updateRecordingState(const QString& channelId, nv::domain::RecordingState state)
 {
     auto it = m_tiles.find(channelId.toStdString());
     if (it == m_tiles.end()) return;
     Tile* t = it->second;
+    t->recState = state;   // 우클릭 메뉴 "녹화 시작/중지" 라벨용
 
-    // ● 버튼: 녹화 중이면 빨강, 아니면 기본
-    static const QString kRecActive = QStringLiteral(
-        "QPushButton { color: #d13438; background: transparent; border: none; "
-        "padding: 0; margin: 0 2px; font-size: 12px; min-width: 24px; min-height: 20px; }"
-        "QPushButton:hover { color: #a80000; }");
-    t->recBtn->setStyleSheet(recording ? kRecActive : kToolButton);
-    t->recBtn->setToolTip(recording ? QStringLiteral("녹화 중지") : QStringLiteral("녹화 시작"));
+    using nv::domain::RecordingState;
+    const bool active = (state == RecordingState::Recording ||
+                         state == RecordingState::Starting);
 
-    // REC 뱃지 표시/숨김
-    if (recording)
+    // ● 버튼: Starting/Recording이면 TOOL_BUTTON_REC(#ff4040), 아니면 TOOL_BUTTON(기본)
+    t->recBtn->setStyleSheet(active ? nv::ui::style::TOOL_BUTTON_REC
+                                    : nv::ui::style::TOOL_BUTTON);
+    t->recBtn->setToolTip(active ? QStringLiteral("녹화 중지") : QStringLiteral("녹화 시작"));
+
+    // P4d: REC 뱃지 — Starting(노랑), Recording(빨강), Idle(숨김)
+    if (state == RecordingState::Starting) {
+        t->recBadge->setStyleSheet(nv::ui::style::REC_BADGE_STARTING);
         t->recBadge->show();
-    else
+    } else if (state == RecordingState::Recording) {
+        t->recBadge->setStyleSheet(nv::ui::style::REC_BADGE_ACTIVE);
+        t->recBadge->show();
+    } else {
         t->recBadge->hide();
+    }
 }
 
 } // namespace nv::ui

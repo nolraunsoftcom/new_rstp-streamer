@@ -80,7 +80,31 @@ std::string RecordingController::makePath(const std::string& channelName) const 
 }
 
 void RecordingController::notify(const std::string& channelId, nv::domain::RecordingState s) {
+    // 세그먼트 마감 캡처: 활성 세그먼트(currentPath 존재)가 Idle로 전이하는 모든 경로
+    // (토글 stop·드롭·롤오버·디스크오류 수렴)에서 길이/경로를 기록한다. 옵저버 호출 전에
+    // 갱신하므로 같은 notify 안에서 옵저버가 lastSegment*를 안전하게 조회할 수 있다.
+    if (s == nv::domain::RecordingState::Idle) {
+        auto it = m_channels.find(channelId);
+        if (it != m_channels.end() && !it->second.currentPath.empty()) {
+            auto& ch = it->second;
+            const auto dur = std::chrono::duration_cast<std::chrono::seconds>(
+                m_clock.now() - ch.segmentStart);
+            ch.lastPath        = ch.currentPath;
+            ch.lastDurationSec = dur.count() < 0 ? 0 : static_cast<int>(dur.count());
+            ch.currentPath.clear();
+        }
+    }
     if (m_observer) m_observer(channelId, s);
+}
+
+std::string RecordingController::lastSegmentPath(const std::string& channelId) const {
+    auto it = m_channels.find(channelId);
+    return it != m_channels.end() ? it->second.lastPath : std::string{};
+}
+
+int RecordingController::lastSegmentDurationSec(const std::string& channelId) const {
+    auto it = m_channels.find(channelId);
+    return it != m_channels.end() ? it->second.lastDurationSec : 0;
 }
 
 void RecordingController::doStart(const std::string& channelId, const std::string& channelName) {
@@ -106,12 +130,20 @@ void RecordingController::doStart(const std::string& channelId, const std::strin
         return;
     }
     auto& ch = m_channels[channelId];
-    ch.state        = nv::domain::RecordingState::Recording;
     ch.channelName  = channelName;
     ch.segmentStart = m_clock.now();
+    ch.currentPath  = path;   // 토스트 메트릭: 활성 세그먼트 경로 기록(Idle 전이 시 캡처)
     ch.startFailures = 0;   // D2: 성공 시 백오프 카운터 리셋
     ch.retryStart = false;  // D1: 정상 녹화 중 — 재시도 게이트 해제
-    notify(channelId, nv::domain::RecordingState::Recording);
+    // P4d: sink.isRecording이 이미 true(예: 테스트용 페이크)면 즉시 Recording,
+    // false이면 Starting(요청됨, 첫 키프레임 대기) — tick()이 전환을 완료한다.
+    if (m_sink.isRecording(channelId)) {
+        ch.state = nv::domain::RecordingState::Recording;
+        notify(channelId, nv::domain::RecordingState::Recording);
+    } else {
+        ch.state = nv::domain::RecordingState::Starting;
+        notify(channelId, nv::domain::RecordingState::Starting);
+    }
 }
 
 void RecordingController::doStop(const std::string& channelId) {
@@ -129,7 +161,8 @@ void RecordingController::toggle(const std::string& channelId,
     auto it = m_channels.find(channelId);
     const bool active = (it != m_channels.end()) &&
         (it->second.armed ||
-         it->second.state == nv::domain::RecordingState::Recording);
+         it->second.state == nv::domain::RecordingState::Recording ||
+         it->second.state == nv::domain::RecordingState::Starting);
     if (active) {
         // 녹화 의도 해제 + 현재 세그먼트 종료
         m_channels[channelId].armed = false;
@@ -145,7 +178,8 @@ void RecordingController::onChannelRemoved(const std::string& channelId) {
     auto it = m_channels.find(channelId);
     if (it == m_channels.end()) return;
     it->second.armed = false;
-    if (it->second.state == nv::domain::RecordingState::Recording) {
+    if (it->second.state == nv::domain::RecordingState::Recording ||
+        it->second.state == nv::domain::RecordingState::Starting) {
         // best-effort: 소스가 곧 파괴되므로 실패 가능, 유령 상태 방지가 핵심
         m_sink.stopRecording(channelId);
         notify(channelId, nv::domain::RecordingState::Idle);
@@ -158,7 +192,8 @@ void RecordingController::onReconnect(const std::string& channelId,
     if (!m_policy.splitOnReconnect) return;
     auto it = m_channels.find(channelId);
     if (it == m_channels.end() || !it->second.armed ||
-        it->second.state != nv::domain::RecordingState::Recording) return;
+        (it->second.state != nv::domain::RecordingState::Recording &&
+         it->second.state != nv::domain::RecordingState::Starting)) return;
 
     // 드롭 엣지: 죽어가는 소스에 doStart 하지 않는다. 현재 세그먼트만 종료하고
     // armed는 유지 — 복구(onStreaming) 시 새 세그먼트가 시작된다.
@@ -170,8 +205,9 @@ void RecordingController::onStreaming(const std::string& channelId,
     auto it = m_channels.find(channelId);
     // armed가 아니면(사용자가 녹화 의도 없음) 무동작
     if (it == m_channels.end() || !it->second.armed) return;
-    // 이미 녹화 중이면 중복 시작 방지
-    if (it->second.state == nv::domain::RecordingState::Recording) return;
+    // 이미 녹화 중이거나 Starting(키프레임 대기 중)이면 중복 시작 방지
+    if (it->second.state == nv::domain::RecordingState::Recording ||
+        it->second.state == nv::domain::RecordingState::Starting) return;
 
     // armed인데 미녹화(드롭으로 종료됐거나 수렴으로 떨어짐) → 새 세그먼트 시작
     doStart(channelId, channelName);
@@ -188,6 +224,28 @@ void RecordingController::tick() {
         // 죽은 소스에 재시도하지 않는다. D2 백오프(doStart 내부)가 영구 실패 폭주를 막는다.
         if (ch.armed && ch.state == nv::domain::RecordingState::Idle && ch.retryStart) {
             doStart(id, ch.channelName);
+            continue;
+        }
+
+        // P4d: Starting → Recording 전환: 첫 키프레임으로 sink가 실제 녹화를 시작했는지 확인.
+        if (ch.state == nv::domain::RecordingState::Starting) {
+            if (m_sink.isRecording(id)) {
+                ch.state = nv::domain::RecordingState::Recording;
+                notify(id, nv::domain::RecordingState::Recording);
+            } else {
+                // D3 유예와 동일 창: kReconcileGrace 이후에도 isRecording==false이면
+                // 디코드 스레드 start 실패로 간주, Idle로 수렴(UI REC 해제, armed 유지).
+                static constexpr std::chrono::seconds kReconcileGrace{3};
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::seconds>(now - ch.segmentStart);
+                if (elapsed >= kReconcileGrace) {
+                    m_logger.log(LogLevel::Warn, id, "RecordingController",
+                                 "Starting 상태에서 녹화 미확인 — Idle로 수렴(REC 해제)");
+                    m_sink.stopRecording(id);
+                    ch.state = nv::domain::RecordingState::Idle;
+                    notify(id, nv::domain::RecordingState::Idle);
+                }
+            }
             continue;
         }
 

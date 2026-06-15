@@ -79,6 +79,36 @@ TEST_CASE("gridIndex 누락 항목은 -1로 로드된다") {
     CHECK(out[0].gridIndex == -1);
 }
 
+TEST_CASE("listIndex 누락(구버전 파일)은 gridIndex로 마이그레이션된다") {
+    QTemporaryDir dir;
+    const QString p = dir.path() + "/nolist.json";
+    {
+        QFile f(p); (void)f.open(QIODevice::WriteOnly);
+        f.write(R"([{"id":"ch1","name":"cam","url":"rtsp://x","gridIndex":5}])");
+    }
+    nv::infra::JsonChannelRepository repo(p.toStdString());
+    auto out = repo.load();
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].gridIndex == 5);
+    CHECK(out[0].listIndex == 5);   // 누락 시 gridIndex 값으로 채워짐
+}
+
+TEST_CASE("listIndex 라운드트립 — gridIndex와 독립적으로 보존") {
+    QTemporaryDir dir;
+    const std::string path = (dir.path() + "/listidx.json").toStdString();
+    nv::infra::JsonChannelRepository repo(path);
+    ChannelConfig c;
+    c.id = "ch1"; c.name = "cam"; c.url = "rtsp://a";
+    c.gridIndex = 2; c.listIndex = 7;   // 일부러 다르게
+    (void)repo.save({c});
+
+    nv::infra::JsonChannelRepository repo2(path);
+    auto out = repo2.load();
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].gridIndex == 2);
+    CHECK(out[0].listIndex == 7);
+}
+
 // ── M2b: 스키마 버전 envelope ───────────────────────────────────────────────
 
 TEST_CASE("envelope 형식 저장→로드 라운드트립") {
@@ -164,8 +194,8 @@ TEST_CASE("autoConnect 필드 라운드트립: true/false 모두 보존된다") 
 
     nv::infra::JsonChannelRepository repo(path);
     std::vector<ChannelConfig> in = {
-        {"ch1", "자동",   "rtsp://auto/stream",   0, /*autoConnect=*/true},
-        {"ch2", "수동",   "rtsp://manual/stream", 1, /*autoConnect=*/false},
+        {"ch1", "자동",   "rtsp://auto/stream",   0, /*listIndex=*/0, /*autoConnect=*/true},
+        {"ch2", "수동",   "rtsp://manual/stream", 1, /*listIndex=*/1, /*autoConnect=*/false},
     };
     REQUIRE(repo.save(in));
 
@@ -213,8 +243,8 @@ TEST_CASE("useRelay 라운드트립: save→load 보존") {
 
     nv::infra::JsonChannelRepository repo(path);
     std::vector<ChannelConfig> in = {
-        {"ch1", "릴레이채널", "rtsp://192.168.1.1:8900/live", 0, false, /*useRelay=*/true},
-        {"ch2", "직결채널",   "rtsp://192.168.1.2:8900/live", 1, false, /*useRelay=*/false},
+        {"ch1", "릴레이채널", "rtsp://192.168.1.1:8900/live", 0, /*listIndex=*/0, false, /*useRelay=*/true},
+        {"ch2", "직결채널",   "rtsp://192.168.1.2:8900/live", 1, /*listIndex=*/1, false, /*useRelay=*/false},
     };
     REQUIRE(repo.save(in));
 

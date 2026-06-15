@@ -33,5 +33,12 @@ private:
     int m_intervalMs;
     HealthCallback m_onHealth;
     QTimer* m_timer = nullptr;
+
+    // 셀프힐: 모든 relay 채널이 RelayDown(=API 무응답=서비스 다운/wedge)으로 연속 관측되면
+    // mediamtx를 강제 재기동한다. RelayNoSource(장비 소스 부재)는 장비 이슈이므로 제외한다.
+    int m_unhealthyStreak = 0;   // 연속 RelayDown 폴 횟수
+    int m_cooldown        = 0;   // 재기동 직후 억제 폴 수(기동 ~10s 동안 오탐 방지)
+    static constexpr int kUnhealthyThreshold = 3;  // 3폴(~9s) 연속 다운 시 재기동
+    static constexpr int kCooldownPolls      = 5;  // 재기동 후 ~15s 억제
 };
 }

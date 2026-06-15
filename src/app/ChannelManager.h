@@ -27,10 +27,18 @@ public:
                    int maxChannels = kDefaultMaxChannels);
 
     void restore(bool autoConnect);                        // 저장본 로드 (시작 시 1회)
-    std::string addChannel(std::string name, std::string url, bool autoConnect = false);   // 실패(한도) 시 "" 반환
+    std::string addChannel(std::string name, std::string url, bool autoConnect = false,
+                           bool useRelay = false);   // 실패(한도) 시 "" 반환
     void removeChannel(const std::string& id);
-    void updateChannel(const std::string& id, std::string name, std::string url, bool autoConnect = false);
-    void swapGrid(const std::string& idA, const std::string& idB);
+    void updateChannel(const std::string& id, std::string name, std::string url,
+                       bool autoConnect = false, bool useRelay = false);
+    void swapGrid(const std::string& idA, const std::string& idB);   // 그리드 위치 교환(gridIndex만)
+    // 그리드 위치 이동(gridIndex만). 대상 셀이 점유면 두 채널 위치 교환, 비면 그대로 이동.
+    // 레거시 moveViewerToGridIndex 대응. persist + notifyList.
+    void moveGrid(const std::string& id, int targetGridIndex);
+    // 채널 리스트 순서 재배열(listIndex만, 그리드와 독립). `order`는 새 표시 순서의 id 목록.
+    // 목록에 없는 채널은 끝에 안정적으로 추가된다. persist + notifyList.
+    void reorderList(const std::vector<std::string>& order);
 
     void connectAll();
     void disconnectAll();
@@ -56,6 +64,7 @@ private:
     void persist();
     void notifyList();
     int nextGridIndex() const;
+    int nextListIndex() const;
     int nextIdNumber() const;
 
     IChannelRepository& m_repo;

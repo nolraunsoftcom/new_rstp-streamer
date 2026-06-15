@@ -22,6 +22,8 @@ static std::vector<ChannelConfig> parseArray(const QJsonArray& arr) {
         c.name = o.value("name").toString().toStdString();
         c.url = o.value("url").toString().toStdString();
         c.gridIndex = o.value("gridIndex").toInt(-1);
+        // listIndex 누락(구버전 파일) 시 gridIndex로 마이그레이션 — 기존 순서 유지.
+        c.listIndex = o.value("listIndex").toInt(c.gridIndex);
         c.autoConnect = o.value("autoConnect").toBool(false);
         c.useRelay = o.value("useRelay").toBool(false);
         if (!c.id.empty()) out.push_back(std::move(c));
@@ -62,6 +64,7 @@ bool JsonChannelRepository::save(const std::vector<ChannelConfig>& channels) {
         o["name"] = QString::fromStdString(c.name);
         o["url"] = QString::fromStdString(c.url);
         o["gridIndex"] = c.gridIndex;
+        o["listIndex"] = c.listIndex;
         o["autoConnect"] = c.autoConnect;
         o["useRelay"] = c.useRelay;
         arr.append(o);

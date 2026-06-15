@@ -77,6 +77,17 @@ int ChannelManager::nextGridIndex() const {
     }
 }
 
+int ChannelManager::nextListIndex() const {
+    int idx = 0;
+    for (;;) {
+        bool taken = false;
+        for (auto& [_, e] : m_entries)
+            if (e.cfg.listIndex == idx) { taken = true; break; }
+        if (!taken) return idx;
+        ++idx;
+    }
+}
+
 int ChannelManager::nextIdNumber() const {
     int maxN = 0;
     for (auto& [id, _] : m_entries) {
@@ -86,7 +97,8 @@ int ChannelManager::nextIdNumber() const {
     return maxN + 1;
 }
 
-std::string ChannelManager::addChannel(std::string name, std::string url, bool autoConnect) {
+std::string ChannelManager::addChannel(std::string name, std::string url, bool autoConnect,
+                                       bool useRelay) {
     if (!isValidRtspUrl(url)) return {};   // S2: 비 RTSP 스킴 거부
     if (channelCount() >= m_maxChannels) return {};
     ChannelConfig cfg;
@@ -94,7 +106,9 @@ std::string ChannelManager::addChannel(std::string name, std::string url, bool a
     cfg.name = std::move(name);
     cfg.url = std::move(url);
     cfg.gridIndex = nextGridIndex();
+    cfg.listIndex = nextListIndex();
     cfg.autoConnect = autoConnect;
+    cfg.useRelay = useRelay;
     // map 삽입 후 std::prev(end()) 는 키 정렬 순서라 id와 다를 수 있으므로
     // id를 미리 지역 변수로 보관한다.
     const std::string id = cfg.id;
@@ -115,16 +129,30 @@ void ChannelManager::removeChannel(const std::string& id) {
 }
 
 void ChannelManager::updateChannel(const std::string& id, std::string name, std::string url,
-                                   bool autoConnect) {
+                                   bool autoConnect, bool useRelay) {
     if (!isValidRtspUrl(url)) return;       // S2: 비 RTSP 스킴 거부
     auto it = m_entries.find(id);
     if (it == m_entries.end()) return;
     auto& e = it->second;
+    const bool relayChanged = (e.cfg.useRelay != useRelay);
+    const bool urlChanged   = (e.cfg.url != url);
     e.cfg.name = std::move(name);
-    const bool urlChanged = (e.cfg.url != url);
     e.cfg.url = url;
     e.cfg.autoConnect = autoConnect;
-    if (urlChanged) {
+    e.cfg.useRelay = useRelay;
+
+    if (relayChanged) {
+        // 직결↔relay 전환: 연결 URL과 컨트롤러 relay 플래그가 바뀐다 → 엔트리 재생성이 안전.
+        // (relay 모드면 makeEntry가 connectUrl=relayUrlFor(id), 컨트롤러 relay 플래그를 설정한다.)
+        ChannelConfig cfg = e.cfg;
+        e.ctrl->disconnect();
+        m_entries.erase(it);
+        m_factory.destroySource(id);
+        makeEntry(std::move(cfg));
+        m_entries.at(id).ctrl->connect();
+    } else if (urlChanged && !useRelay) {
+        // 직결 모드 URL 변경 → 즉시 재연결. (relay 모드는 connectUrl=relayUrlFor(id)로 불변이며,
+        //  장비 URL 변경은 relay config 재생성으로 반영된다 — pushList→RelayCoordinator.updateChannels.)
         e.ctrl->disconnect();               // Failed 함정 방지 — main.cpp 연결 버튼과 동일 시퀀스
         e.ctrl->setUrl(std::move(url));
         e.ctrl->connect();
@@ -138,6 +166,44 @@ void ChannelManager::swapGrid(const std::string& idA, const std::string& idB) {
     auto b = m_entries.find(idB);
     if (a == m_entries.end() || b == m_entries.end()) return;
     std::swap(a->second.cfg.gridIndex, b->second.cfg.gridIndex);
+    persist();
+    notifyList();
+}
+
+void ChannelManager::moveGrid(const std::string& id, int targetGridIndex) {
+    auto it = m_entries.find(id);
+    if (it == m_entries.end() || targetGridIndex < 0) return;
+    const int sourceGridIndex = it->second.cfg.gridIndex;
+    if (sourceGridIndex == targetGridIndex) return;
+
+    // 대상 셀을 점유한 다른 채널이 있으면 그 채널을 출발 셀로 보낸다(=교환). 비어있으면 이동만.
+    for (auto& [otherId, e] : m_entries) {
+        if (otherId != id && e.cfg.gridIndex == targetGridIndex) {
+            e.cfg.gridIndex = sourceGridIndex;
+            break;
+        }
+    }
+    it->second.cfg.gridIndex = targetGridIndex;
+    persist();
+    notifyList();
+}
+
+void ChannelManager::reorderList(const std::vector<std::string>& order) {
+    int idx = 0;
+    // 1) 전달된 순서대로 listIndex 재부여(존재하는 채널만).
+    for (const auto& id : order) {
+        auto it = m_entries.find(id);
+        if (it != m_entries.end()) it->second.cfg.listIndex = idx++;
+    }
+    // 2) order에 없던 채널은 기존 listIndex 순서를 보존해 뒤에 안정적으로 이어붙인다.
+    std::vector<const Entry*> rest;
+    for (auto& [id, e] : m_entries)
+        if (std::find(order.begin(), order.end(), id) == order.end())
+            rest.push_back(&e);
+    std::sort(rest.begin(), rest.end(),
+              [](const Entry* x, const Entry* y) { return x->cfg.listIndex < y->cfg.listIndex; });
+    for (const Entry* e : rest)
+        m_entries.at(e->cfg.id).cfg.listIndex = idx++;
     persist();
     notifyList();
 }

@@ -20,11 +20,13 @@ public:
     }
 
     bool stop() override {
+        ++stopCalls;
         m_status.running = false;
         return true;
     }
 
     int ensureRunningCalls = 0;
+    int stopCalls = 0;
     std::string lastConfigPath;
     bool ensureRunningResult = true;
     nv::app::RelayServiceStatus m_status;

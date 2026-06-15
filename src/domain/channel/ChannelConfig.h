@@ -8,6 +8,7 @@ struct ChannelConfig {
     std::string name;
     std::string url;
     int gridIndex = -1;    // 그리드 셀 위치. -1 = 미배치(manager가 부여)
+    int listIndex = -1;    // 채널 리스트 표시 순서(그리드와 독립). -1 = 미배치(manager가 부여)
     bool autoConnect = false;  // 앱 시작 시 자동 연결 여부
     bool useRelay = false;     // true: relay 경유 연결(relayUrlFor 사용), false: 직결
 

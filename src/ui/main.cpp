@@ -24,6 +24,8 @@
 #include "src/domain/channel/ChannelConfig.h"
 #include "src/domain/recording/RecordingState.h"
 #include "src/domain/relay/RelayConfig.h"
+
+Q_DECLARE_METATYPE(nv::domain::RecordingState)
 #include "src/infra/ffmpeg/ChannelSourceFactory.h"
 #include "src/infra/persist/JsonChannelRepository.h"
 #include "src/infra/persist/RecordingPaths.h"
@@ -37,6 +39,7 @@
 #include "src/infra/video/VtMetalBridge.h"  // M2c Task2 컴파일/링크 확인용(호출은 Task3). 헤더만 참조.
 #include "src/ui/channels/ChannelListPanel.h"
 #include "src/ui/grid/GridView.h"
+#include "src/ui/grid/VideoTileWidget.h"
 #include "src/ui/relay/RelayCoordinator.h"
 #include "src/ui/shell/ControlBridge.h"
 #include "src/ui/shell/RepaintClock.h"
@@ -62,6 +65,8 @@ int main(int argc, char** argv) {
         qputenv("QT_WIDGETS_RHI", "1");
     }
     QApplication app(argc, argv);
+    // P4d: RecordingState를 Qt 메타타입으로 등록 — QueuedConnection Q_ARG 전달에 필요
+    qRegisterMetaType<nv::domain::RecordingState>("nv::domain::RecordingState");
     app.setApplicationName(QStringLiteral("영상관리시스템"));
     app.setWindowIcon(QIcon(QStringLiteral(":/logo.png")));
 
@@ -134,6 +139,15 @@ int main(int argc, char** argv) {
     gridCb.swapRequested = [&](std::string a, std::string b) {
         executor.post([&, a, b] { mgr.swapGrid(a, b); });
     };
+    gridCb.moveRequested = [&](std::string id, int targetGridIndex) {
+        executor.post([&, id, targetGridIndex] { mgr.moveGrid(id, targetGridIndex); });
+    };
+    gridCb.fullscreenRequested = [&](std::string id) {
+        if (winPtr != nullptr) winPtr->openFullscreenTab(id);
+    };
+    gridCb.infoRequested = [&](std::string id) {
+        if (winPtr != nullptr) winPtr->openChannelInfo(id);
+    };
     gridCb.editRequested = [&](std::string id) {
         if (winPtr != nullptr) winPtr->openEditDialog(id);
     };
@@ -146,13 +160,20 @@ int main(int argc, char** argv) {
                 if (c.id == id) { name = c.name; break; }
             }
             const std::string path = nv::infra::RecordingPaths::snapshotPath(name);
-            snapSvc.capture(id, name, path);
+            const bool ok = snapSvc.capture(id, name, path);
             // 스냅샷 후 파일 패널 갱신 (queued — UI 스레드)
             if (winPtr != nullptr) {
                 QMetaObject::invokeMethod(winPtr, "onRecordingState",
                     Qt::QueuedConnection,
                     Q_ARG(QString, QString::fromStdString(id)),
-                    Q_ARG(bool, recCtrl.stateOf(id) == nv::domain::RecordingState::Recording));
+                    Q_ARG(nv::domain::RecordingState, recCtrl.stateOf(id)));
+                // P3: 스냅샷 저장 토스트 (성공 시만)
+                if (ok) {
+                    QMetaObject::invokeMethod(winPtr, "onSnapshotSaved",
+                        Qt::QueuedConnection,
+                        Q_ARG(QString, QString::fromStdString(name)),
+                        Q_ARG(QString, QString::fromStdString(path)));
+                }
             }
         });
     };
@@ -178,26 +199,41 @@ int main(int argc, char** argv) {
     };
     panelCb.removeRequested = gridCb.removeRequested;
     panelCb.retryRequested = gridCb.retryRequested;
+    panelCb.reorderRequested = [&](std::vector<std::string> order) {
+        executor.post([&, order = std::move(order)] { mgr.reorderList(order); });
+    };
+    panelCb.fullscreenRequested = [&](std::string id) {
+        if (winPtr != nullptr) winPtr->openFullscreenTab(id);
+    };
     auto* channelPanel = new nv::ui::ChannelListPanel(panelCb);
 
     // MainWindow commands
     nv::ui::MainWindow::Commands winCmds;
-    winCmds.addChannel = [&](std::string n, std::string u, bool ac) {
-        executor.post([&, n = std::move(n), u = std::move(u), ac] {
-            const auto id = mgr.addChannel(n, u, ac);
+    winCmds.addChannel = [&](std::string n, std::string u, bool ac, bool relay) {
+        executor.post([&, n = std::move(n), u = std::move(u), ac, relay] {
+            const auto id = mgr.addChannel(n, u, ac, relay);
             if (!id.empty()) {
                 if (auto* c = mgr.controller(id)) c->connect();
             }
         });
     };
-    winCmds.updateChannel = [&](std::string id, std::string n, std::string u, bool ac) {
-        executor.post([&, id, n = std::move(n), u = std::move(u), ac] {
-            mgr.updateChannel(id, n, u, ac);
+    winCmds.updateChannel = [&](std::string id, std::string n, std::string u, bool ac, bool relay) {
+        executor.post([&, id, n = std::move(n), u = std::move(u), ac, relay] {
+            mgr.updateChannel(id, n, u, ac, relay);
         });
     };
     winCmds.removeChannel = gridCb.removeRequested;
     winCmds.retryChannel = gridCb.retryRequested;
     winCmds.framePainted = gridCb.framePainted;
+    // 전체화면 탭 영상 위젯 팩토리 — 공유 프레임 레지스트리 기반(2차 스트림 없음).
+    // RepaintClock tick에 pollFrame 연결(그리드 타일과 동일 갱신원). 닫을 때 MainWindow가 삭제.
+    winCmds.makeFullscreenView = [&](std::string id) -> QWidget* {
+        auto* v = new nv::ui::VideoTileWidget(
+            *static_cast<nv::app::IFrameSurfaceRegistry*>(&factory), id, nullptr);
+        QObject::connect(&repaintClock, &nv::ui::RepaintClock::tick,
+                         v, &nv::ui::VideoTileWidget::pollFrame);
+        return v;
+    };
     winCmds.swapChannels = gridCb.swapRequested;
 
     nv::ui::MainWindow win(grid, channelPanel, logPanel, winCmds);
@@ -214,21 +250,25 @@ int main(int argc, char** argv) {
     auto pushList = [&] {
         const auto cfgs = mgr.configs();
         QVector<QString> ids, names, urls;
-        QVector<int> gi;
-        QVector<bool> ac;
+        QVector<int> gi, li;
+        QVector<bool> ac, ur;
         for (const auto& c : cfgs) {
             ids.push_back(QString::fromStdString(c.id));
             names.push_back(QString::fromStdString(c.name));
             urls.push_back(QString::fromStdString(c.url));
             gi.push_back(c.gridIndex);
+            li.push_back(c.listIndex);
             ac.push_back(c.autoConnect);
+            ur.push_back(c.useRelay);
         }
         QMetaObject::invokeMethod(&win, "onChannelList", Qt::QueuedConnection,
                                   Q_ARG(QVector<QString>, ids),
                                   Q_ARG(QVector<QString>, names),
                                   Q_ARG(QVector<QString>, urls),
                                   Q_ARG(QVector<int>, gi),
-                                  Q_ARG(QVector<bool>, ac));
+                                  Q_ARG(QVector<int>, li),
+                                  Q_ARG(QVector<bool>, ac),
+                                  Q_ARG(QVector<bool>, ur));
         // #6: relay 모드 채널 목록을 워커 스레드(RelayCoordinator)로 마샬 → config 재생성(멱등).
         if (auto* coord = coordPtr.load()) {
             std::vector<nv::domain::RelayPath> relayCh;
@@ -288,13 +328,62 @@ int main(int argc, char** argv) {
             bridge.publish(QString::fromStdString(id), s);
         });
         // M3-5: RecordingController 옵저버 — 상태 변화 시 UI 스레드로 queued 전달
-        recCtrl.setObserver([&](const std::string& id, nv::domain::RecordingState state) {
-            const bool rec = (state == nv::domain::RecordingState::Recording);
+        // P3: Recording→Idle 전이 감지로 녹화 저장/실패 토스트 트리거
+        // prevRecState: control 스레드 단일 호출이므로 mutex 불필요.
+        auto prevRecState = std::make_shared<std::map<std::string, nv::domain::RecordingState>>();
+        recCtrl.setObserver([&, prevRecState](const std::string& id, nv::domain::RecordingState state) {
             if (winPtr != nullptr) {
                 QMetaObject::invokeMethod(winPtr, "onRecordingState",
                     Qt::QueuedConnection,
                     Q_ARG(QString, QString::fromStdString(id)),
-                    Q_ARG(bool, rec));
+                    Q_ARG(nv::domain::RecordingState, state));
+
+                // P3: 전이 감지
+                const auto prev = [&]() -> nv::domain::RecordingState {
+                    auto it = prevRecState->find(id);
+                    return it != prevRecState->end()
+                        ? it->second
+                        : nv::domain::RecordingState::Idle;
+                }();
+
+                if (state == nv::domain::RecordingState::Idle
+                    && prev == nv::domain::RecordingState::Recording) {
+                    // Recording → Idle: 녹화 정상 저장됨
+                    // 채널명은 control 스레드(mgr.configs() 안전) 여기서 조회
+                    std::string name;
+                    for (const auto& c : mgr.configs()) {
+                        if (c.id == id) { name = c.name; break; }
+                    }
+                    // 메트릭: 컨트롤러가 notify(Idle)에서 캡처한 직전 세그먼트 경로/길이.
+                    // bytes는 stopRecording이 비동기(디코드 스레드가 다음 패킷에서 파일 마감)라
+                    // 여기서 stat하면 너무 이르다 → UI 슬롯(큐 이후)에서 파일 크기를 읽는다.
+                    const std::string recPath = recCtrl.lastSegmentPath(id);
+                    const int recDur = recCtrl.lastSegmentDurationSec(id);
+                    QMetaObject::invokeMethod(winPtr, "onRecordingSaved",
+                        Qt::QueuedConnection,
+                        Q_ARG(QString, QString::fromStdString(name)),
+                        Q_ARG(QString, QString::fromStdString(recPath)),
+                        Q_ARG(bool, false),          // autoSaved: 롤오버 구분 불가 — false
+                        Q_ARG(qint64, 0),            // bytes: UI에서 파일 stat으로 산출
+                        Q_ARG(int, recDur));
+                } else if (state == nv::domain::RecordingState::Idle
+                           && prev == nv::domain::RecordingState::Idle
+                           && recCtrl.stateOf(id) == nv::domain::RecordingState::Idle) {
+                    // Idle → Idle: doStart 실패 경로 (녹화 실패)
+                    // armed 상태는 공개 API로 확인 불가 — stateOf만 사용 가능.
+                    // 단, 이 경로는 doStart 실패(ok==false) 시에만 발생한다.
+                    // prev==Idle && cur==Idle 전이는 오직 doStart-fail notify뿐이므로 안전.
+                    std::string name;
+                    for (const auto& c : mgr.configs()) {
+                        if (c.id == id) { name = c.name; break; }
+                    }
+                    QMetaObject::invokeMethod(winPtr, "onRecordingFailed",
+                        Qt::QueuedConnection,
+                        Q_ARG(QString, QString::fromStdString(name)),
+                        Q_ARG(QString, QStringLiteral("녹화 시작 실패")));
+                }
+
+                (*prevRecState)[id] = state;
             }
         });
     });
@@ -434,7 +523,10 @@ int main(int argc, char** argv) {
     QThread relayThread;
     nv::ui::RelayCoordinator* relayCoord = nullptr;
 
-    if (!relayChannels.empty() && relaySvc) {
+    // relaySvc 지원 OS면 relay 채널이 0개여도 코디네이터를 띄워둔다 — 런타임에 채널을
+    // relay로 바꾸면 pushList→updateChannels가 그때 ensureUp(mediamtx 기동)한다.
+    // (start()/updateChannels()는 빈 채널이면 ensureUp을 건너뛴다.)
+    if (relaySvc) {
         relaySup.emplace(*relaySvc, relayApi, logger, relayWriter.asCallback());
 
         const std::string relayCfgPath =

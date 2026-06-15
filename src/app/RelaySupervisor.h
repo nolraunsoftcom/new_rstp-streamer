@@ -28,6 +28,11 @@ public:
     bool ensureUp(const std::vector<nv::domain::RelayPath>& channels,
                   const std::string& configPath);
 
+    // 셀프힐: 서비스를 완전 정리(stop)한 뒤 ensureUp으로 재생성·재기동한다. wedge된(살아있으나
+    // 응답 없는) mediamtx를 ensureUp 멱등으로는 못 살리므로, 헬스 지속 실패 시 강제 재기동용.
+    bool restart(const std::vector<nv::domain::RelayPath>& channels,
+                 const std::string& configPath);
+
     // ③ relayChannels(useRelay=true인 것만) 각각의 장비→relay leg 상태.
     // API 무응답이면 전부 RelayDown.
     std::map<std::string, RelayChannelHealth> pollHealth(
