@@ -5,15 +5,10 @@
 #include <QTimer>
 #include "src/ui/shell/Toast.h"
 
-// ── QApplication 싱글톤 (VideoTileWidgetTest 패턴 그대로) ──────────────────
+// 프로세스 단일 QApplication(공유·누수) — tests/helpers/QtTestApp.h 참고.
+#include "tests/helpers/QtTestApp.h"
 namespace {
-int   g_argc = 0;
-char* g_argv[1] = {nullptr};
-
-QApplication& getApp() {
-    static QApplication app(g_argc, g_argv);
-    return app;
-}
+QApplication& getApp() { return nvtest::app(); }
 } // namespace
 
 // ────────────────────────────────────────────────────────────────────────────

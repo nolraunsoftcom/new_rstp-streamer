@@ -50,14 +50,9 @@ struct FakeRegistry : public nv::app::IFrameSurfaceRegistry {
     }
 };
 
-// QApplication 싱글톤 — 이 TU 전체에서 1회만 생성.
-int   g_argc = 0;
-char* g_argv[1] = {nullptr};
-
-QApplication& getApp() {
-    static QApplication app(g_argc, g_argv);
-    return app;
-}
+// 프로세스 단일 QApplication(공유·누수) — tests/helpers/QtTestApp.h 참고.
+#include "tests/helpers/QtTestApp.h"
+QApplication& getApp() { return nvtest::app(); }
 
 // D9: pollFrame은 보이는 타일만 폴링한다(오프스크린 스킵). 테스트는 실제로 보이는 타일을
 // 검증하므로 show+resize 후 이벤트를 펌프해 isVisible/visibleRegion이 채워지게 한다.
