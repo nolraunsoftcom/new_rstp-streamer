@@ -81,8 +81,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up vcpkg
+        # vcpkg.json builtin-baseline(2026.06.01)과 동일 커밋으로 핀 — baseline 로드/버전 정합
         run: |
           git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          cd /d C:\vcpkg
+          git checkout f3e10653cc27d62a37a3763cd84b38bca07c6075
           C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
         shell: cmd
 

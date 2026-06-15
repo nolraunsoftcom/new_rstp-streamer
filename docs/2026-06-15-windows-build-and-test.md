@@ -16,7 +16,7 @@
 | **CMake ≥ 3.24** | VS에 포함 / `winget install Kitware.CMake` | PATH 등록 |
 | **Ninja** | `winget install Ninja-build.Ninja` | Ninja 생성기 사용 시 |
 | **Qt 6.8 LTS** (msvc2022_64) | Qt 온라인 인스톨러 — MSVC 2022 64-bit + Widgets/Gui/Network/**Qt Shader Tools** 컴포넌트 | 예: `C:\Qt\6.8.3\msvc2022_64` (6.8은 2029까지 LTS) |
-| **vcpkg** | `git clone https://github.com/microsoft/vcpkg C:\dev\vcpkg && C:\dev\vcpkg\bootstrap-vcpkg.bat` | FFmpeg를 매니페스트로 자동 설치 |
+| **vcpkg** | `git clone https://github.com/microsoft/vcpkg C:\dev\vcpkg` → `cd C:\dev\vcpkg && git checkout f3e10653cc27d62a37a3763cd84b38bca07c6075 && bootstrap-vcpkg.bat` | FFmpeg 매니페스트 자동 설치. `vcpkg.json` `builtin-baseline`(2026.06.01)과 **동일 커밋으로 체크아웃**해야 baseline 정합 |
 | **FFmpeg CLI** | `winget install Gyan.FFmpeg` | `ffmpeg.exe`/`ffprobe.exe` — **테스트 스크립트용**(빌드 FFmpeg와 별개) |
 | **mediamtx** | [github 릴리스](https://github.com/bluenviron/mediamtx/releases) `mediamtx.exe`를 PATH에 | v1.19.1 기준 (relay + 합성소스) |
 | **adb** | Android Platform-Tools | VOXL2 장비 로그/연결 — PATH 등록 |
