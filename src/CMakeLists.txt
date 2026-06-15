@@ -168,6 +168,10 @@ if(APPLE)
   )
 else()
   qt_add_executable(new_viewer ui/main.cpp)
+  # Windows: GUI(WINDOWS) 서브시스템 — 콘솔 창이 뜨지 않게. Qt6::EntryPoint가 WinMain→main 연결.
+  if(WIN32)
+    set_target_properties(new_viewer PROPERTIES WIN32_EXECUTABLE TRUE)
+  endif()
 endif()
 
 target_link_libraries(new_viewer PRIVATE nv_ui)
