@@ -17,6 +17,7 @@ extern "C" {
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -234,6 +235,9 @@ void FfmpegStreamSource::finishRecorder() {
 }
 
 void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* listener) {
+  // 디코드 스레드 경계: 예외가 스레드 밖으로 새면 std::terminate(0xc0000409)로 앱이 죽는다.
+  // 잘못된 채널/손상 스트림에서도 앱을 죽이지 않고 에러로 보고하도록 경계에서 잡는다.
+  try {
     AVFormatContext* fmt = avformat_alloc_context();
     fmt->interrupt_callback.callback = &FfmpegStreamSource::interruptCb;
     fmt->interrupt_callback.opaque = this;
@@ -418,6 +422,13 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
     avcodec_free_context(&dec);
     m_graceUntilMs = steadyNowMs() + 1000;   // 읽기 중단 후 TEARDOWN 송신 유예 (2단계)
     avformat_close_input(&fmt);
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "[FfmpegStreamSource] decode thread threw: %s\n", e.what());
+    if (!m_stop) listener->onSourceError(DiagnosisReason::DecodeError);
+  } catch (...) {
+    std::fprintf(stderr, "[FfmpegStreamSource] decode thread threw (unknown)\n");
+    if (!m_stop) listener->onSourceError(DiagnosisReason::DecodeError);
+  }
 }
 
 } // namespace nv::infra

@@ -1,5 +1,8 @@
 #include "ControlExecutor.h"
 
+#include <cstdio>
+#include <exception>
+
 namespace nv::infra {
 
 ControlExecutor::ControlExecutor(std::chrono::milliseconds tickInterval,
@@ -41,7 +44,15 @@ void ControlExecutor::run() {
             m_queue.pop_front();
             m_busy = true;
             lk.unlock();
-            fn();
+            // 작업 예외가 control 스레드 밖으로 새면 std::terminate(0xc0000409)로 앱 전체가
+            // 죽는다. 한 작업 실패가 앱을 죽이지 않도록 경계에서 삼킨다(로깅 후 계속).
+            try {
+                fn();
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "[ControlExecutor] task threw: %s\n", e.what());
+            } catch (...) {
+                std::fprintf(stderr, "[ControlExecutor] task threw (unknown)\n");
+            }
             lk.lock();
             m_busy = false;
         }
@@ -52,7 +63,13 @@ void ControlExecutor::run() {
         const auto now = std::chrono::steady_clock::now();
         if (now >= nextTick) {
             lk.unlock();
-            m_onTick();
+            try {
+                m_onTick();
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "[ControlExecutor] onTick threw: %s\n", e.what());
+            } catch (...) {
+                std::fprintf(stderr, "[ControlExecutor] onTick threw (unknown)\n");
+            }
             lk.lock();
             nextTick = now + m_tickInterval;
         }
