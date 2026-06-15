@@ -76,9 +76,22 @@ jobs:
     env:
       VCPKG_ROOT: C:\vcpkg
       VCPKG_DEFAULT_TRIPLET: x64-windows
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-bincache
 
     steps:
       - uses: actions/checkout@v4
+
+      # FFmpeg 빌드 결과(.zip)를 CI 실행 간 보존 — 2회차부터 19분 재빌드 생략
+      - name: vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-bincache
+          key: vcpkg-win-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-win-
+
+      - name: Ensure vcpkg cache dir
+        run: New-Item -ItemType Directory -Force -Path "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
+        shell: pwsh
 
       - name: Set up vcpkg
         # vcpkg.json builtin-baseline(2026.06.01)과 동일 커밋으로 핀 — baseline 로드/버전 정합
@@ -102,6 +115,21 @@ jobs:
           # ShaderTools(qsb) — CMake가 find_package(Qt6 ... ShaderTools) 필수. base 미포함 애드온.
           modules: qtshadertools
           cache: true
+
+      # 진단: aqt Qt 설치에 GuiPrivate(QRhi/rhi 헤더) cmake 설정이 실제 있는지 확인.
+      # configure(=vcpkg FFmpeg 빌드 19분) 전에 실행되어 빠르게 결과 확인 가능.
+      - name: Diagnose Qt private modules
+        run: |
+          Write-Host "Qt6_DIR    = $env:Qt6_DIR"
+          Write-Host "QT_ROOT_DIR= $env:QT_ROOT_DIR"
+          $cmakeDir = Join-Path $env:QT_ROOT_DIR 'lib\cmake'
+          Write-Host "=== lib\cmake 내 *Private* 패키지 ==="
+          Get-ChildItem $cmakeDir -Directory -Filter '*Private*' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+          $gp = Join-Path $cmakeDir 'Qt6GuiPrivate\Qt6GuiPrivateConfig.cmake'
+          Write-Host "Qt6GuiPrivateConfig.cmake exists = $(Test-Path $gp)"
+          Write-Host "=== rhi 헤더 존재 확인 ==="
+          Get-ChildItem (Join-Path $env:QT_ROOT_DIR 'include\QtGui') -Recurse -Filter 'qrhi.h' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+        shell: pwsh
 
       - name: Configure (CMake + vcpkg toolchain)
         run: |
