@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
+#include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QString>
@@ -20,9 +21,13 @@ HttpRelayControlApi::HttpRelayControlApi(std::string apiBase,
     : m_apiBase(std::move(apiBase)), m_timeout(timeout) {}
 
 std::vector<nv::app::RelayPathHealth> HttpRelayControlApi::pathsHealth() {
+    std::fprintf(stderr, "[relayapi] pathsHealth start %s\n", m_apiBase.c_str());
     // QNetworkAccessManager는 QCoreApplication event loop가 존재해야 정상 동작한다.
-    // 생산에서는 control 스레드(Qt loop 보유) 에서 호출됨을 전제한다.
+    // 워커 스레드(RelayCoordinator)에서 호출된다.
     QNetworkAccessManager mgr;
+    // 로컬(127.0.0.1) 조회엔 프록시가 불필요. Windows에서 기본 프록시 탐지는 WinHTTP/COM
+    // 경로를 타는데, COM 미초기화 워커 스레드에서 fail-fast(0xc0000409) 가능 → NoProxy로 차단.
+    mgr.setProxy(QNetworkProxy::NoProxy);
     mgr.setTransferTimeout(static_cast<int>(m_timeout.count()));
 
     const QUrl url(QString::fromStdString(m_apiBase + "/v3/paths/list"));
