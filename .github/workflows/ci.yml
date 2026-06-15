@@ -78,11 +78,15 @@ jobs:
       - name: Install Qt6 via aqtinstall
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.7.3'
+          # Qt 6.8 LTS (2029.10까지 지원). '6.8.*' = aqt 오픈소스 저장소의 최신 6.8 패치 자동 선택
+          # (6.8.6/6.8.7은 상용 전용이라 aqt 미제공 → 최신 오픈소스 패치로 해소).
+          version: '6.8.*'
           host: windows
           target: desktop
+          # Qt 6.8부터 win64_msvc2022_64 (VS2022 네이티브 툴체인).
           arch: win64_msvc2022_64
-          modules: ''
+          # ShaderTools(qsb) — CMake가 find_package(Qt6 ... ShaderTools) 필수. base 미포함 애드온.
+          modules: qtshadertools
           cache: true
 
       - name: Configure (CMake + vcpkg toolchain)

@@ -15,7 +15,7 @@
 | **Visual Studio 2022** | Community 이상 + "C++를 사용한 데스크톱 개발" 워크로드 | MSVC v143, Windows 11 SDK |
 | **CMake ≥ 3.24** | VS에 포함 / `winget install Kitware.CMake` | PATH 등록 |
 | **Ninja** | `winget install Ninja-build.Ninja` | Ninja 생성기 사용 시 |
-| **Qt 6.7+** (msvc2022_64) | Qt 온라인 인스톨러 — Widgets/Gui/Network/**ShaderTools** 컴포넌트 포함 | 예: `C:\Qt\6.7.2\msvc2022_64` |
+| **Qt 6.8 LTS** (msvc2022_64) | Qt 온라인 인스톨러 — MSVC 2022 64-bit + Widgets/Gui/Network/**Qt Shader Tools** 컴포넌트 | 예: `C:\Qt\6.8.3\msvc2022_64` (6.8은 2029까지 LTS) |
 | **vcpkg** | `git clone https://github.com/microsoft/vcpkg C:\dev\vcpkg && C:\dev\vcpkg\bootstrap-vcpkg.bat` | FFmpeg를 매니페스트로 자동 설치 |
 | **FFmpeg CLI** | `winget install Gyan.FFmpeg` | `ffmpeg.exe`/`ffprobe.exe` — **테스트 스크립트용**(빌드 FFmpeg와 별개) |
 | **mediamtx** | [github 릴리스](https://github.com/bluenviron/mediamtx/releases) `mediamtx.exe`를 PATH에 | v1.19.1 기준 (relay + 합성소스) |
@@ -45,10 +45,10 @@ vcpkg 매니페스트(`vcpkg.json`)가 FFmpeg(avcodec/avformat/avutil/swscale, G
 
 ```powershell
 # Ninja (단일 구성, 빠름)
-.\ops\win\build.ps1 -QtDir C:\Qt\6.7.2\msvc2022_64 -VcpkgRoot C:\dev\vcpkg
+.\ops\win\build.ps1 -QtDir C:\Qt\6.8.3\msvc2022_64 -VcpkgRoot C:\dev\vcpkg
 
 # 또는 Visual Studio 생성기 (다중 구성)
-.\ops\win\build.ps1 -QtDir C:\Qt\6.7.2\msvc2022_64 -VcpkgRoot C:\dev\vcpkg -Generator "Visual Studio 17 2022"
+.\ops\win\build.ps1 -QtDir C:\Qt\6.8.3\msvc2022_64 -VcpkgRoot C:\dev\vcpkg -Generator "Visual Studio 17 2022"
 ```
 
 산출물:
@@ -62,7 +62,7 @@ windeployqt가 POST_BUILD로 Qt DLL을, vcpkg가 FFmpeg DLL을 exe 옆에 복사
 ```powershell
 cmake -S . -B build -G Ninja `
   -DCMAKE_TOOLCHAIN_FILE=C:\dev\vcpkg\scripts\buildsystems\vcpkg.cmake `
-  -DCMAKE_PREFIX_PATH=C:\Qt\6.7.2\msvc2022_64 `
+  -DCMAKE_PREFIX_PATH=C:\Qt\6.8.3\msvc2022_64 `
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
