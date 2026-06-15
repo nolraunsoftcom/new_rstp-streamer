@@ -154,7 +154,19 @@ jobs:
         run: cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
         shell: pwsh
 
-      # 실행 가능한 포터블 폴더 업로드 — exe + Qt DLL(windeployqt) + FFmpeg DLL(vcpkg applocal)
+      # mediamtx.exe를 아티팩트에 번들 — relay가 PATH 의존 없이 동작(앱이 exe 옆 절대경로 사용).
+      - name: Bundle mediamtx (relay 서버)
+        run: |
+          $ver = "v1.9.3"
+          $zip = "mediamtx_${ver}_windows_amd64.zip"
+          $url = "https://github.com/bluenviron/mediamtx/releases/download/$ver/$zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath mediamtx_dl -Force
+          Copy-Item mediamtx_dl\mediamtx.exe build\src\Release\mediamtx.exe -Force
+          Write-Host "bundled mediamtx.exe ($ver)"
+        shell: pwsh
+
+      # 실행 가능한 포터블 폴더 업로드 — exe + Qt DLL(windeployqt) + FFmpeg DLL(vcpkg) + mediamtx.exe
       # Actions의 해당 실행 > Artifacts 에서 new_viewer-windows-x64.zip 다운로드 후 압축 해제하여 실행.
       - name: Upload Windows app (artifact)
         uses: actions/upload-artifact@v4

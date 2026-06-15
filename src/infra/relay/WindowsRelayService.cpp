@@ -33,12 +33,36 @@ int runSilent(const std::string& cmd) {
     return runCapture(cmd + " >NUL 2>&1", nullptr);
 }
 
+// mediamtx.exe를 실행파일(new_viewer.exe) 폴더의 절대경로로 해석한다.
+// 상대 이름("mediamtx.exe")을 그대로 sc create binPath에 넣으면 SCM이 앱 폴더가 아닌
+// System32 기준으로 찾아 실패한다. 번들된 mediamtx를 절대경로로 가리켜야 한다.
+// 앱 폴더에 없으면 원래 값(PATH 폴백) 유지.
+std::string resolveExeDir(const std::string& exe) {
+    if (exe.find('\\') != std::string::npos || exe.find('/') != std::string::npos)
+        return exe;   // 이미 경로 포함
+    wchar_t buf[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return exe;
+    std::wstring path(buf, n);
+    const auto slash = path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return exe;
+    const std::wstring candidate = path.substr(0, slash + 1) + L"mediamtx.exe";
+    if (GetFileAttributesW(candidate.c_str()) == INVALID_FILE_ATTRIBUTES)
+        return exe;   // 앱 폴더에 없음 → PATH 폴백
+    const int len = WideCharToMultiByte(CP_UTF8, 0, candidate.c_str(), -1,
+                                        nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return exe;
+    std::string out(static_cast<size_t>(len - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, candidate.c_str(), -1, out.data(), len, nullptr, nullptr);
+    return out;
+}
+
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 WindowsRelayService::WindowsRelayService(std::string mediamtxExe, std::string serviceName)
-    : m_exe(std::move(mediamtxExe)), m_svcName(std::move(serviceName)) {}
+    : m_exe(resolveExeDir(mediamtxExe)), m_svcName(std::move(serviceName)) {}
 
 int WindowsRelayService::runSc(const std::string& args, std::string* out) const {
     return runCapture("sc " + args, out);
