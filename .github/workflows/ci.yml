@@ -11,22 +11,33 @@ jobs:
   # macOS — Homebrew FFmpeg + Qt6, pkg-config 경로
   # ──────────────────────────────────────────────
   build-macos:
-    name: macOS (Homebrew FFmpeg + Qt6)
-    runs-on: macos-14   # Apple Silicon (arm64)
+    name: macOS (Homebrew FFmpeg + Qt 6.8 LTS)
+    runs-on: macos-14   # Apple Silicon (arm64) — Qt clang_64는 universal2
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies (brew)
+      # FFmpeg/pkg-config만 brew. Qt는 Windows와 동일하게 6.8 LTS(aqtinstall)로 핀.
+      - name: Install FFmpeg (brew)
         run: |
           brew update
-          brew install ffmpeg qt@6 pkg-config
+          brew install ffmpeg pkg-config
+
+      - name: Install Qt6 via aqtinstall (6.8 LTS — Windows와 버전 통일)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: qtshadertools
+          cache: true
 
       - name: Configure (CMake)
         run: |
           cmake -B build -S . \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="/opt/homebrew;/opt/homebrew/opt/qt@6" \
+            -DCMAKE_PREFIX_PATH="$Qt6_DIR;/opt/homebrew" \
             -DCMAKE_POLICY_DEFAULT_CMP0167=NEW
 
       - name: Build
