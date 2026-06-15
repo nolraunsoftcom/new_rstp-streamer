@@ -144,6 +144,15 @@ jobs:
         run: cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
         shell: pwsh
 
+      # 실행 가능한 포터블 폴더 업로드 — exe + Qt DLL(windeployqt) + FFmpeg DLL(vcpkg applocal)
+      # Actions의 해당 실행 > Artifacts 에서 new_viewer-windows-x64.zip 다운로드 후 압축 해제하여 실행.
+      - name: Upload Windows app (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: new_viewer-windows-x64
+          path: build/src/Release/
+          if-no-files-found: error
+
       - name: Unit tests (no integration)
         run: ctest --test-dir build -C Release -LE integration --output-on-failure
         shell: pwsh
