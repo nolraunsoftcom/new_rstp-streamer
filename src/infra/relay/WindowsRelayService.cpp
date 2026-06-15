@@ -133,7 +133,7 @@ bool WindowsRelayService::ensureRunning(const std::string& configPath) {
 }
 
 nv::app::RelayServiceStatus WindowsRelayService::status() const {
-    RelayServiceStatus s;
+    nv::app::RelayServiceStatus s;
 
     std::string queryOut;
     int rc = runSc("query \"" + m_svcName + "\"", &queryOut);
