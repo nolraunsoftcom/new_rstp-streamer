@@ -33,7 +33,7 @@ public:
         std::function<void(std::string id)> removeChannel;
         std::function<void(std::string id)> retryChannel;
         std::function<void(std::string id)> framePainted;
-        std::function<void(std::string a, std::string b)> swapChannels;
+        std::function<void(std::string a, std::string b)> swapChannels;   // 그리드 위치 교환(gridIndex)
     };
 
     MainWindow(GridView* grid, ChannelListPanel* channelPanel, LogPanel* logPanel,
@@ -46,7 +46,8 @@ public:
 
 public slots:
     void onChannelList(QVector<QString> ids, QVector<QString> names, QVector<QString> urls,
-                       QVector<int> gridIndexes, QVector<bool> autoConnects);
+                       QVector<int> gridIndexes, QVector<int> listIndexes,
+                       QVector<bool> autoConnects);
     void onSnapshot(QString channelId, QString state, int attempts, QList<int> stages,
                     double pps, qlonglong msSinceLastPacket, QString reason);
     // M3-5: 녹화 상태 변경 → 그리드 타일 버튼 + 파일 패널 갱신

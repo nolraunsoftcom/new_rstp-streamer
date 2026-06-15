@@ -1,12 +1,20 @@
 #include "GridView.h"
 #include <algorithm>
 #include <set>
+#include <QApplication>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMimeData>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -18,6 +26,9 @@
 #include "src/ui/common/Style.h"
 
 namespace nv::ui {
+
+// 그리드 타일 DnD MIME — 페이로드는 드래그 출발 타일의 channelId(UTF-8).
+static const QString kTileDragMime = QStringLiteral("application/x-nv-channel-id");
 
 // ── 레거시 상수 (MainWindow.cpp 기준) ─────────────────────────────────────
 static constexpr int kInfoBarHeight = 28;   // VIEWER_INFO_BAR_HEIGHT
@@ -57,6 +68,9 @@ struct GridView::Tile : public QWidget {
     VideoTileWidget* video       = nullptr;
     std::string      channelId;
     QString          name;
+
+    // ── DnD(위치 교환) — 타일은 드래그 출발지. 드롭은 GridView(콘텐츠)가 위치 기반 처리. ──
+    QPoint           dragStartPos;            // 좌클릭 누른 지점(드래그 임계 판정용)
 
     Tile(nv::app::IFrameSurfaceRegistry& registry, std::string id, QString nm, QWidget* parent)
         : QWidget(parent), channelId(std::move(id)), name(std::move(nm))
@@ -122,6 +136,30 @@ struct GridView::Tile : public QWidget {
         mainLay->addWidget(video, 1);
 
         setContextMenuPolicy(Qt::CustomContextMenu);
+
+        // ── DnD: 타일을 드래그 출발지로. 영상 영역(가장 큰 면적)만 마우스 투명 처리해
+        // 그 위의 누름/이동 이벤트가 타일(this)에 도달하게 한다 → 영상에서 드래그 시작.
+        // 정보바는 투명하게 두지 않는다(스냅샷/녹화 버튼 클릭 보존). 정보바 위 컨텍스트 메뉴는
+        // 정보바가 contextMenuEvent를 처리하지 않아 타일로 전파된다. 드롭은 GridView(콘텐츠)가
+        // 위치 기반으로 처리하므로 타일은 setAcceptDrops를 켜지 않는다(빈칸 드롭도 동작). ──
+        video->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    }
+
+    void mousePressEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton) dragStartPos = e->pos();
+        QWidget::mousePressEvent(e);
+    }
+
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (!(e->buttons() & Qt::LeftButton)) { QWidget::mouseMoveEvent(e); return; }
+        if ((e->pos() - dragStartPos).manhattanLength() < QApplication::startDragDistance())
+            return;
+        auto* drag = new QDrag(this);
+        auto* mime = new QMimeData();
+        mime->setData(kTileDragMime, QByteArray::fromStdString(channelId));
+        mime->setText(name);
+        drag->setMimeData(mime);
+        drag->exec(Qt::MoveAction);
     }
 };
 
@@ -148,6 +186,78 @@ GridView::GridView(nv::app::IFrameSurfaceRegistry* registry, Callbacks cb,
     m_grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
 
     setWidget(m_content);
+
+    // ── DnD: 콘텐츠에서 위치 기반 드롭 처리(빈칸 이동/점유 교환). 타일은 드래그 출발지. ──
+    m_content->setAcceptDrops(true);
+    m_content->installEventFilter(this);
+    m_dropHighlight = new QWidget(m_content);
+    m_dropHighlight->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_dropHighlight->setStyleSheet(QStringLiteral(
+        "background-color: rgba(0,120,212,40); border: 2px solid #0078d4;"));
+    m_dropHighlight->hide();
+}
+
+int GridView::cellIndexAt(const QPoint& pos) const {
+    const int cols = m_cachedCols;
+    const int cw   = m_cachedCellW;
+    const int ch   = m_cachedCellH;
+    if (cols <= 0 || cw <= 0 || ch <= 0) return -1;
+    if (pos.x() < 0 || pos.y() < 0) return -1;
+    const int strideX = cw + kGridSpacing;
+    const int strideY = ch + kGridSpacing;
+    const int col = pos.x() / strideX;
+    const int row = pos.y() / strideY;
+    if (col >= cols) return -1;
+    return row * cols + col;
+}
+
+bool GridView::eventFilter(QObject* obj, QEvent* ev) {
+    if (obj != m_content) return QScrollArea::eventFilter(obj, ev);
+
+    auto showHighlightAt = [this](int index) {
+        if (!m_dropHighlight || index < 0 || m_cachedCols <= 0) { if (m_dropHighlight) m_dropHighlight->hide(); return; }
+        const int col = index % m_cachedCols;
+        const int row = index / m_cachedCols;
+        const int x = col * (m_cachedCellW + kGridSpacing);
+        const int y = row * (m_cachedCellH + kGridSpacing);
+        m_dropHighlight->setGeometry(x, y, m_cachedCellW, m_cachedCellH);
+        m_dropHighlight->raise();
+        m_dropHighlight->show();
+    };
+
+    switch (ev->type()) {
+    case QEvent::DragEnter: {
+        auto* e = static_cast<QDragEnterEvent*>(ev);
+        if (!e->mimeData()->hasFormat(kTileDragMime)) { e->ignore(); return true; }
+        showHighlightAt(cellIndexAt(e->position().toPoint()));
+        e->acceptProposedAction();
+        return true;
+    }
+    case QEvent::DragMove: {
+        auto* e = static_cast<QDragMoveEvent*>(ev);
+        if (!e->mimeData()->hasFormat(kTileDragMime)) { e->ignore(); return true; }
+        showHighlightAt(cellIndexAt(e->position().toPoint()));
+        e->acceptProposedAction();
+        return true;
+    }
+    case QEvent::DragLeave: {
+        if (m_dropHighlight) m_dropHighlight->hide();
+        return true;
+    }
+    case QEvent::Drop: {
+        auto* e = static_cast<QDropEvent*>(ev);
+        if (m_dropHighlight) m_dropHighlight->hide();
+        const auto src = e->mimeData()->data(kTileDragMime).toStdString();
+        const int index = cellIndexAt(e->position().toPoint());
+        if (src.empty() || index < 0) { e->ignore(); return true; }
+        if (m_cb.moveRequested) m_cb.moveRequested(src, index);
+        e->acceptProposedAction();
+        return true;
+    }
+    default:
+        break;
+    }
+    return QScrollArea::eventFilter(obj, ev);
 }
 
 // ── 레거시 채움 알고리즘 (MainWindow.cpp updateGridCellSizes 직접 이식) ──────

@@ -292,7 +292,7 @@ int MainWindow::manualColumns() const {
 
 void MainWindow::onChannelList(QVector<QString> ids, QVector<QString> names,
                                QVector<QString> urls, QVector<int> gridIndexes,
-                               QVector<bool> autoConnects) {
+                               QVector<int> listIndexes, QVector<bool> autoConnects) {
     m_channels.clear();
     // 제거된 채널을 m_streaming에서 정리: 현재 id 집합에 없으면 삭제
     QSet<QString> currentIds(ids.begin(), ids.end());
@@ -308,13 +308,18 @@ void MainWindow::onChannelList(QVector<QString> ids, QVector<QString> names,
         cfg.name        = names[i].toStdString();
         cfg.url         = urls[i].toStdString();
         cfg.gridIndex   = gridIndexes[i];
+        cfg.listIndex   = i < listIndexes.size() ? listIndexes[i] : gridIndexes[i];
         cfg.autoConnect = i < autoConnects.size() ? autoConnects[i] : false;
         m_channels.push_back(std::move(cfg));
         // 신규 채널은 미연결(false) 초기값 설정
         if (!m_streaming.contains(ids[i]))
             m_streaming[ids[i]] = false;
     }
-    m_channelPanel->updateChannels(m_channels);
+    // 그리드: gridIndex 순서(transport가 이미 gridIndex 정렬). 리스트: listIndex 순서(독립).
+    std::vector<nv::domain::ChannelConfig> listOrdered = m_channels;
+    std::sort(listOrdered.begin(), listOrdered.end(),
+              [](const auto& a, const auto& b) { return a.listIndex < b.listIndex; });
+    m_channelPanel->updateChannels(listOrdered);
     rebuildGrid();
     updateStatusBar();
 }

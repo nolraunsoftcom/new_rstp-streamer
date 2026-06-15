@@ -1,4 +1,5 @@
 #include "ChannelListPanel.h"
+#include <QDropEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
@@ -9,6 +10,25 @@
 #include "src/ui/common/Confirm.h"
 
 namespace nv::ui {
+
+namespace {
+// InternalMove 드롭 후 새 행 순서를 콜백으로 알리는 QListWidget. InternalMove는 Qt 버전에
+// 따라 rowsMoved 대신 remove+insert로 구현될 수 있어 dropEvent 종료 시점에 순서를 읽는다.
+// Q_OBJECT 미사용(시그널/슬롯 없음, std::function 콜백) — moc 불필요.
+class ReorderListWidget : public QListWidget {
+public:
+    using QListWidget::QListWidget;
+    std::function<void()> onReordered;
+
+protected:
+    void dropEvent(QDropEvent* e) override {
+        const int before = count();
+        QListWidget::dropEvent(e);
+        // 내부 이동만 처리(외부 드롭으로 행 수가 바뀌면 무시).
+        if (count() == before && onReordered) onReordered();
+    }
+};
+} // namespace
 
 static constexpr int kHeaderHeight = 32;
 static const QString kHeaderStyle = QStringLiteral(
@@ -40,9 +60,29 @@ ChannelListPanel::ChannelListPanel(Callbacks cb, QWidget* parent)
     bodyLayout->setContentsMargins(8, 8, 8, 8);
     bodyLayout->setSpacing(4);
 
-    m_list = new QListWidget(body);
+    auto* listWidget = new ReorderListWidget(body);
+    m_list = listWidget;
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
     m_list->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    // 가로 스크롤 없이 긴 이름/URL은 줄바꿈 처리(생략표시 없음).
+    m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_list->setWordWrap(true);
+    m_list->setTextElideMode(Qt::ElideNone);
+    m_list->setResizeMode(QListView::Adjust);   // 폭 변경 시 항목 높이 재계산(줄바꿈 반영)
+    // DnD 재배열(레거시 채널 리스트 재정렬 대응). InternalMove + 행간 드롭 인디케이터.
+    m_list->setDragEnabled(true);
+    m_list->setAcceptDrops(true);
+    m_list->setDragDropMode(QAbstractItemView::InternalMove);
+    m_list->setDefaultDropAction(Qt::MoveAction);
+    m_list->setDropIndicatorShown(true);
+    listWidget->onReordered = [this]() {
+        if (!m_cb.reorderRequested) return;
+        std::vector<std::string> order;
+        order.reserve(static_cast<size_t>(m_list->count()));
+        for (int i = 0; i < m_list->count(); ++i)
+            order.push_back(m_list->item(i)->data(Qt::UserRole).toString().toStdString());
+        m_cb.reorderRequested(std::move(order));
+    };
     m_list->setStyleSheet(QStringLiteral(
         "QListWidget { background-color: #ffffff; color: #222; border: 1px solid #d0d0d0; }"
         "QListWidget::item { padding: 4px 8px; border-bottom: 1px solid #eeeeee; }"
@@ -110,9 +150,12 @@ void ChannelListPanel::updateChannels(const std::vector<nv::domain::ChannelConfi
     m_configs = configs;
     m_list->clear();
     for (const auto& cfg : configs) {
-        m_list->addItem(QStringLiteral("%1\n%2")
-                            .arg(QString::fromStdString(cfg.name),
-                                 QString::fromStdString(cfg.url)));
+        auto* item = new QListWidgetItem(
+            QStringLiteral("%1\n%2").arg(QString::fromStdString(cfg.name),
+                                         QString::fromStdString(cfg.url)));
+        // DnD 재배열 후 행→채널 매핑용. 드롭 시 UserRole에서 id 순서를 읽는다.
+        item->setData(Qt::UserRole, QString::fromStdString(cfg.id));
+        m_list->addItem(item);
     }
 }
 

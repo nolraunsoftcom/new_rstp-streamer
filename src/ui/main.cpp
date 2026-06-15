@@ -138,6 +138,9 @@ int main(int argc, char** argv) {
     gridCb.swapRequested = [&](std::string a, std::string b) {
         executor.post([&, a, b] { mgr.swapGrid(a, b); });
     };
+    gridCb.moveRequested = [&](std::string id, int targetGridIndex) {
+        executor.post([&, id, targetGridIndex] { mgr.moveGrid(id, targetGridIndex); });
+    };
     gridCb.editRequested = [&](std::string id) {
         if (winPtr != nullptr) winPtr->openEditDialog(id);
     };
@@ -189,6 +192,9 @@ int main(int argc, char** argv) {
     };
     panelCb.removeRequested = gridCb.removeRequested;
     panelCb.retryRequested = gridCb.retryRequested;
+    panelCb.reorderRequested = [&](std::vector<std::string> order) {
+        executor.post([&, order = std::move(order)] { mgr.reorderList(order); });
+    };
     auto* channelPanel = new nv::ui::ChannelListPanel(panelCb);
 
     // MainWindow commands
@@ -225,13 +231,14 @@ int main(int argc, char** argv) {
     auto pushList = [&] {
         const auto cfgs = mgr.configs();
         QVector<QString> ids, names, urls;
-        QVector<int> gi;
+        QVector<int> gi, li;
         QVector<bool> ac;
         for (const auto& c : cfgs) {
             ids.push_back(QString::fromStdString(c.id));
             names.push_back(QString::fromStdString(c.name));
             urls.push_back(QString::fromStdString(c.url));
             gi.push_back(c.gridIndex);
+            li.push_back(c.listIndex);
             ac.push_back(c.autoConnect);
         }
         QMetaObject::invokeMethod(&win, "onChannelList", Qt::QueuedConnection,
@@ -239,6 +246,7 @@ int main(int argc, char** argv) {
                                   Q_ARG(QVector<QString>, names),
                                   Q_ARG(QVector<QString>, urls),
                                   Q_ARG(QVector<int>, gi),
+                                  Q_ARG(QVector<int>, li),
                                   Q_ARG(QVector<bool>, ac));
         // #6: relay 모드 채널 목록을 워커 스레드(RelayCoordinator)로 마샬 → config 재생성(멱등).
         if (auto* coord = coordPtr.load()) {

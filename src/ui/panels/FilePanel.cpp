@@ -12,11 +12,15 @@
 #include <QListWidgetItem>
 #include <QMenu>
 #include <QMessageBox>
+#include <QAbstractItemView>
+#include <QAbstractTextDocumentLayout>
 #include <QPainter>
 #include <QPixmap>
 #include <QPolygon>
 #include <QProcess>
 #include <QPushButton>
+#include <QStyledItemDelegate>
+#include <QTextDocument>
 #include <QUrl>
 #include <QVBoxLayout>
 #include "src/infra/persist/RecordingPaths.h"
@@ -27,6 +31,81 @@ namespace nv::ui {
 // 레거시 legacy viewer와 일치: 64×48
 static constexpr int kThumbW = 64;
 static constexpr int kThumbH = 48;
+
+namespace {
+// 파일 목록 행 델리게이트: 좌측 썸네일 + 우측 텍스트(임의 위치 줄바꿈).
+// 기본 델리게이트는 단어 경계로만 줄바꿈해 공백 없는 긴 파일명(장비_2026..._001.mkv)이
+// 잘린다. WrapAtWordBoundaryOrAnywhere로 어디서나 줄바꿈하고 높이를 계산한다.
+class FileRowDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    static constexpr int kPad   = 8;   // 행 좌우/상하 여백
+    static constexpr int kGap    = 8;  // 썸네일과 텍스트 간격
+
+    int textWidthFor(const QStyleOptionViewItem& opt) const {
+        int w = opt.rect.width();
+        if (w <= 0) {
+            if (auto* view = qobject_cast<const QAbstractItemView*>(opt.widget))
+                w = view->viewport()->width();
+        }
+        if (w <= 0) w = 240;
+        return std::max(20, w - kThumbW - kGap - kPad * 2);
+    }
+
+    void layoutDoc(QTextDocument& doc, const QString& text,
+                   const QFont& font, int textWidth) const {
+        QTextOption to;
+        to.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        doc.setDefaultTextOption(to);
+        doc.setDefaultFont(font);
+        doc.setPlainText(text);
+        doc.setTextWidth(textWidth);
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem& option,
+                   const QModelIndex& index) const override {
+        QStyleOptionViewItem opt(option);
+        initStyleOption(&opt, index);
+        QTextDocument doc;
+        layoutDoc(doc, index.data(Qt::DisplayRole).toString(), opt.font, textWidthFor(opt));
+        const int textH = static_cast<int>(doc.size().height());
+        return QSize(opt.rect.width(), std::max(kThumbH, textH) + kPad * 2);
+    }
+
+    void paint(QPainter* p, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        QStyleOptionViewItem opt(option);
+        initStyleOption(&opt, index);
+
+        // 배경(선택/호버) — QSS item 스타일 대체
+        if (opt.state & QStyle::State_Selected)
+            p->fillRect(opt.rect, QColor(0xcf, 0xe8, 0xff));
+        else if (opt.state & QStyle::State_MouseOver)
+            p->fillRect(opt.rect, QColor(0xf3, 0xf8, 0xff));
+        p->fillRect(QRect(opt.rect.left(), opt.rect.bottom(), opt.rect.width(), 1),
+                    QColor(0xe5, 0xe5, 0xe5));   // 하단 구분선
+
+        // 썸네일(좌측, 세로 중앙)
+        const QIcon icon = index.data(Qt::DecorationRole).value<QIcon>();
+        if (!icon.isNull()) {
+            const int iy = opt.rect.top() + (opt.rect.height() - kThumbH) / 2;
+            icon.paint(p, QRect(opt.rect.left() + kPad, iy, kThumbW, kThumbH));
+        }
+
+        // 텍스트(우측, 줄바꿈)
+        const int textW = textWidthFor(opt);
+        QTextDocument doc;
+        layoutDoc(doc, index.data(Qt::DisplayRole).toString(), opt.font, textW);
+        p->save();
+        p->translate(opt.rect.left() + kPad + kThumbW + kGap, opt.rect.top() + kPad);
+        QAbstractTextDocumentLayout::PaintContext ctx;
+        ctx.palette.setColor(QPalette::Text, QColor(0x22, 0x22, 0x22));
+        doc.documentLayout()->draw(p, ctx);
+        p->restore();
+    }
+};
+} // namespace
 
 FilePanel::FilePanel(QWidget* parent)
     : QWidget(parent)
@@ -122,10 +201,10 @@ void FilePanel::setupUi()
     m_list->setSpacing(2);
     m_list->setStyleSheet(QStringLiteral(
         "QListWidget { background-color: #ffffff; color: #222; border: 1px solid #d0d0d0; "
-        "font-size: 11px; outline: none; }"
-        "QListWidget::item { padding: 10px 8px; border-bottom: 1px solid #e5e5e5; }"
-        "QListWidget::item:selected { background-color: #cfe8ff; color: #111; }"
-        "QListWidget::item:hover { background-color: #f3f8ff; }"));
+        "font-size: 11px; outline: none; }"));
+    // 긴 파일명 줄바꿈(공백 없는 이름 포함) — 커스텀 델리게이트가 행 렌더/높이 담당.
+    m_list->setItemDelegate(new FileRowDelegate(m_list));
+    m_list->setMouseTracking(true);   // 델리게이트 호버 배경(State_MouseOver) 갱신용
 
     // 더블클릭 → 열기
     connect(m_list, &QListWidget::itemDoubleClicked, this,

@@ -29,6 +29,8 @@ public:
         std::function<void(std::string id)> retryRequested;
         std::function<void(std::string id)> framePainted;
         std::function<void(std::string idA, std::string idB)> swapRequested;
+        // DnD 위치 이동: 타일을 그리드 위치(index)로 드롭. 점유 셀이면 swap, 빈칸이면 이동.
+        std::function<void(std::string id, int targetGridIndex)> moveRequested;
         // M3-5: 정보바 버튼 콜백
         std::function<void(std::string id)> snapshotRequested;
         std::function<void(std::string id)> recordToggleRequested;
@@ -47,16 +49,21 @@ public:
 
 protected:
     void resizeEvent(QResizeEvent* ev) override;
+    // m_content의 드래그/드롭 이벤트를 가로채 위치 기반 위치이동/교환을 처리한다.
+    bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
     // 배치만 갱신 — 위젯 파괴 절대 금지
     void relayout();
+    // m_content 좌표 → 그리드 셀 index(캐시된 레이아웃 기준). 범위 밖이면 -1.
+    int cellIndexAt(const QPoint& pos) const;
 
     nv::app::IFrameSurfaceRegistry* m_registry = nullptr;
     Callbacks m_cb;
     RepaintClock& m_repaintClock;
     QWidget*     m_content = nullptr;   // scroll content widget
     QGridLayout* m_grid    = nullptr;
+    QWidget*     m_dropHighlight = nullptr;   // DnD 드롭 대상 셀 하이라이트(반투명, 평소 숨김)
     struct Tile;
     std::map<std::string, Tile*> m_tiles;         // channelId → tile (영속, 부채 #13: std::string 키)
     std::vector<QLabel*>     m_placeholders;      // 빈 셀 플레이스홀더 풀 (hide/show)

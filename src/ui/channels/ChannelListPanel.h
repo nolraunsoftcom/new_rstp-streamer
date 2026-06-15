@@ -19,6 +19,8 @@ public:
         std::function<void(std::string id)> editRequested;
         std::function<void(std::string id)> removeRequested;
         std::function<void(std::string id)> retryRequested;
+        // DnD 재배열: 새 표시 순서의 id 목록(위→아래). 비어있으면 DnD 무동작.
+        std::function<void(std::vector<std::string> order)> reorderRequested;
     };
 
     explicit ChannelListPanel(Callbacks cb, QWidget* parent = nullptr);
