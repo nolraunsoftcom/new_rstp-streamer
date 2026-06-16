@@ -16,7 +16,11 @@ struct FrameSurface {
     // CpuRgba일 때만 유효
     std::vector<uint8_t> rgba;          // tight, stride = width*4
 
-    // GpuTexture일 때만 유효 — 불투명 핸들 (VideoToolbox: CVPixelBufferRef, D3D11: ID3D11Texture2D*).
+    // GpuTexture일 때만 유효 — 불투명 핸들.
+    //   macOS: CVPixelBufferRef (retain으로 수명 유지 → 디코더가 새 버퍼 할당).
+    //   Windows: AVFrame*  — D3D11VA 디코더는 텍스처 배열 풀을 "재사용"하므로 텍스처만 retain하면
+    //            디코더가 슬라이스를 덮어쓴다. AVFrame ref(clone)를 잡아야 슬라이스 수명이 유지된다.
+    //            텍스처(data[0])/배열 인덱스(data[1])는 브리지가 이 핸들에서 추출한다.
     // 수명: 레지스트리가 ref를 보유, 소비자는 그릴 동안만 유효. void*로 두고 인프라 계층에서 캐스팅.
     void* gpuHandle = nullptr;
 };

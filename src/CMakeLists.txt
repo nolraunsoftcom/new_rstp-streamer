@@ -43,6 +43,7 @@ add_library(nv_infra STATIC
   infra/ffmpeg/FfmpegRecorder.cpp
   infra/ffmpeg/HwContext.cpp
   infra/ffmpeg/ChannelSourceFactory.cpp
+  infra/video/D3d11VideoBridge.cpp   # Windows D3D11 NV12→RGBA GPU 변환(비-Windows는 no-op 스텁)
   infra/persist/JsonChannelRepository.cpp
   infra/persist/PngSnapshotWriter.cpp
   infra/relay/MediaMtxConfigWriter.cpp
@@ -59,7 +60,8 @@ if(WIN32)
   # d3d11 / dxgi는 FFmpeg avcodec이 내부적으로 요구; 명시 링크로 확실히 해결.
   target_include_directories(nv_infra PUBLIC ${FFMPEG_INCLUDE_DIRS})
   # Qt6::Gui — PngSnapshotWriter의 QImage(PNG 저장). Core는 JsonChannelRepository/RecordingPaths.
-  target_link_libraries(nv_infra PUBLIC nv_app Qt6::Core Qt6::Gui Qt6::Network ${FFMPEG_LIBRARIES} d3d11 dxgi)
+  # d3dcompiler — D3d11VideoBridge가 NV12→RGBA 셰이더를 런타임 D3DCompile.
+  target_link_libraries(nv_infra PUBLIC nv_app Qt6::Core Qt6::Gui Qt6::Network ${FFMPEG_LIBRARIES} d3d11 dxgi d3dcompiler)
 else()
   # macOS/Linux: pkg-config IMPORTED_TARGET 사용.
   # Qt6::Gui — PngSnapshotWriter의 QImage(PNG 저장).

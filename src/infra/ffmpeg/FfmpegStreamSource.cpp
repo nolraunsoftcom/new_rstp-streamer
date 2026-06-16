@@ -53,6 +53,16 @@ void* cvRetain(void* p) {
 void cvRelease(void* p) {
     CVPixelBufferRelease(static_cast<CVPixelBufferRef>(p));
 }
+#elif defined(_WIN32)
+// Windows GPU 핸들 = AVFrame*. D3D11VA 디코더는 텍스처 배열 풀을 재사용하므로 AVFrame ref(clone)를
+// 잡아야 슬라이스 수명이 유지된다. retain=clone(새 ref), release=free(ref 반납).
+void* frameRetain(void* p) {
+    return av_frame_clone(static_cast<AVFrame*>(p));
+}
+void frameRelease(void* p) {
+    AVFrame* f = static_cast<AVFrame*>(p);
+    av_frame_free(&f);
+}
 #endif
 } // namespace
 
@@ -60,6 +70,8 @@ FfmpegStreamSource::FfmpegStreamSource(LatestSurfaceSlot& frameSlot) : m_frameSl
     avformat_network_init();
 #if defined(__APPLE__)
     m_frameSlot.setGpuRefcounters(&cvRetain, &cvRelease);
+#elif defined(_WIN32)
+    m_frameSlot.setGpuRefcounters(&frameRetain, &frameRelease);
 #endif
 }
 
@@ -234,8 +246,11 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
     // 실패하면 hw.active()==false 이고 dec는 그대로 SW 디코더로 열린다 (완전 폴백).
     HwContext hw;
     const bool hwReady = hw.init(dec, codec);
-    std::fprintf(stderr, "[FfmpegStreamSource] decode path = %s\n", hwReady ? "HW (videotoolbox)" : "SW");
+    std::fprintf(stderr, "[FfmpegStreamSource] decode path = %s\n", hwReady ? "HW" : "SW");
     const AVPixelFormat hwPix = hw.hwPixFmt();
+    // Windows: QRhi 공유 디바이스로 hw를 만들었으면 GPU 변환 zero-copy 경로(CPU 왕복 제거).
+    // 아니면(자체 디바이스/macOS) 기존 CPU 변환 경로. (macOS에선 미사용.)
+    [[maybe_unused]] const bool hwShared = hw.sharesRenderDevice();
 
     if (avcodec_open2(dec, codec, nullptr) < 0) {
         if (!m_stop) listener->onSourceError(DiagnosisReason::DecodeError);
@@ -313,6 +328,16 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
                 hwReady && hwPix != AV_PIX_FMT_NONE &&
                 static_cast<AVPixelFormat>(frm->format) == hwPix;
 
+#if defined(_WIN32)
+            // Windows zero-copy: 공유 디바이스 HW 프레임은 CPU 전송/sws 없이 AVFrame을 그대로
+            // 발행한다(슬롯이 clone해 슬라이스 수명 유지). 렌더러 D3D11 브리지가 GPU에서
+            // NV12→RGBA 변환. 동반 RGBA 없음(CPU 왕복 제거 — 부채 #15 Windows).
+            if (isHwFrame && hwShared) {
+                m_frameSlot.publishGpu(frm->width, frm->height, frm, /*rgba=*/nullptr);
+                av_frame_unref(frm);
+                continue;
+            }
+#endif
             // RGBA로 스케일할 원본 프레임 — HW면 transfer 결과(swf), SW면 frm 그대로.
             AVFrame* src = frm;
             void* gpuHandle = nullptr;

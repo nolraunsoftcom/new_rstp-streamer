@@ -46,12 +46,20 @@ public:
     // 그 외: nullptr
     static void* extractGpuHandle(const AVFrame* frame);
 
+    // D3D11 텍스처 배열 슬라이스 인덱스(AVFrame.data[1]). 그 외 플랫폼은 0.
+    static int extractGpuIndex(const AVFrame* frame);
+
+    // Windows에서 SharedGpuDevice 공유 디바이스로 hw 컨텍스트를 만들었으면 true.
+    // (디코더 텍스처가 렌더 디바이스와 같아 GPU 변환 zero-copy 가능 — 아니면 CPU 폴백.)
+    bool sharesRenderDevice() const { return m_sharedDevice; }
+
 private:
     // get_format 콜백: hw_pix_fmt가 후보에 있으면 그것을, 없으면 첫 SW 포맷 폴백.
     static AVPixelFormat getFormat(AVCodecContext* ctx, const AVPixelFormat* fmts);
 
     AVBufferRef* m_deviceCtx = nullptr;
     AVPixelFormat m_hwPixFmt = AV_PIX_FMT_NONE;
+    bool m_sharedDevice = false;   // Windows: QRhi 공유 디바이스로 생성됨(zero-copy 가능)
 };
 
 } // namespace nv::infra

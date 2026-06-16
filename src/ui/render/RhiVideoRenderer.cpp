@@ -5,6 +5,9 @@
 #include <rhi/qrhi.h>
 #include <rhi/qrhi_platform.h>
 #include "src/app/ports/IFrameSurfaceRegistry.h"
+#if defined(_WIN32)
+#include "src/infra/video/SharedGpuDevice.h"
+#endif
 
 namespace nv::ui {
 
@@ -42,6 +45,27 @@ RhiVideoRenderer::~RhiVideoRenderer() = default;
 //    plane MTLTexture를 보류에 담고, render()가 createFrom으로 래핑해 그린다. ──────────
 void RhiVideoRenderer::present(const nv::app::FrameSurface& surface) {
     if (surface.seq == m_seq) return;
+
+#if defined(_WIN32)
+    // 0) Windows D3D11 GPU 변환: 디코더 NV12(AVFrame 핸들)를 공유 디바이스에서 RGBA로 변환.
+    //    변환이 완료되면 AVFrame은 즉시 반납(슬라이스 풀 회수). present()=render()와 같은 UI
+    //    스레드라 QRhi immediate context 경합 없음.
+    if (surface.kind == nv::app::FrameSurface::Kind::GpuTexture &&
+        surface.gpuHandle != nullptr && m_d3dReady) {
+        nv::infra::RgbaTexture rt;
+        if (m_d3dBridge.convert(surface.gpuHandle, surface.width, surface.height, rt)) {
+            m_d3dRgbaTex = rt.tex;
+            m_d3dRgbaSize = QSize(rt.width, rt.height);
+            m_hasD3dPending = true;
+            m_seq = surface.seq;
+            if (m_registry != nullptr) m_registry->releaseConsumed(m_channelId, surface.gpuHandle);
+            update();
+            return;
+        }
+        // 변환 실패 → 핸들 반납 후 RGBA 폴백(동반 rgba 있으면).
+        if (m_registry != nullptr) m_registry->releaseConsumed(m_channelId, surface.gpuHandle);
+    }
+#endif
 
     // 1) NV12 zero-copy 시도 (HW 디코드 + macOS). bridge 미초기화면 건너뜀(RGBA 폴백).
     if (surface.kind == nv::app::FrameSurface::Kind::GpuTexture &&
@@ -130,6 +154,20 @@ void RhiVideoRenderer::releaseGpuResources() {
     m_vbuf.reset();
     m_vbufUploaded = false;
     m_bridgeReady = false;
+
+#if defined(_WIN32)
+    // D3D11 변환 자원 해제. 디바이스 로스트 가능성 → 공유 디바이스 등록도 해제(재init이 재등록).
+    m_d3dWrapTex.reset();
+    m_d3dWrapSize = QSize();
+    m_d3dRgbaTex = nullptr;
+    m_d3dRgbaSize = QSize();
+    m_hasD3dPending = false;
+    if (m_d3dReady) {
+        nv::infra::SharedGpuDevice::setD3d11Device(nullptr);
+        m_d3dBridge.shutdown();
+        m_d3dReady = false;
+    }
+#endif
 }
 
 void RhiVideoRenderer::releaseResources() {
@@ -253,6 +291,21 @@ void RhiVideoRenderer::initialize(QRhiCommandBuffer*) {
         }
     }
 #endif
+
+#if defined(_WIN32)
+    // Windows: QRhi의 ID3D11Device로 D3D11 변환 브리지 init. 성공해야만 SharedGpuDevice에 등록
+    // → 디코드측이 같은 디바이스로 hw를 만들어 zero-copy. init 실패면 미등록 → 디코드 CPU 폴백.
+    if (!m_d3dReady) {
+        const QRhiNativeHandles* nh = m_rhi->nativeHandles();
+        const auto* dh = static_cast<const QRhiD3D11NativeHandles*>(nh);
+        if (dh != nullptr && dh->dev != nullptr) {
+            if (m_d3dBridge.init(dh->dev)) {
+                m_d3dReady = true;
+                nv::infra::SharedGpuDevice::setD3d11Device(dh->dev);
+            }
+        }
+    }
+#endif
 }
 
 void RhiVideoRenderer::render(QRhiCommandBuffer* cb) {
@@ -344,6 +397,45 @@ void RhiVideoRenderer::render(QRhiCommandBuffer* cb) {
             m_hasNv12Pending = false;
         }
     }
+
+#if defined(_WIN32)
+    // ── Windows D3D11 변환 결과(RGBA) 소비: createFrom으로 RHI 텍스처 래핑 후 RGBA 파이프라인 ──
+    if (m_hasD3dPending && m_d3dReady && m_d3dRgbaTex != nullptr) {
+        const QSize sz = m_d3dRgbaSize;
+        if (sz.width() > 0 && sz.height() > 0) {
+            // 브리지 RGBA tex는 같은 크기면 포인터가 안정적(재사용) — 크기 변할 때만 재래핑.
+            // 같은 크기 후속 프레임은 convert가 같은 tex 내용을 갱신하므로 재바인딩 불필요.
+            if (!m_d3dWrapTex || m_d3dWrapSize != sz) {
+                m_d3dWrapTex.reset(m_rhi->newTexture(QRhiTexture::RGBA8, sz));
+                m_d3dWrapTex->setFormat(QRhiTexture::RGBA8);
+                m_d3dWrapTex->setPixelSize(sz);
+                QRhiTexture::NativeTexture nt{reinterpret_cast<quint64>(m_d3dRgbaTex), 0};
+                if (m_d3dWrapTex->createFrom(nt)) {
+                    m_d3dWrapSize = sz;
+                    m_srb->setBindings({
+                        QRhiShaderResourceBinding::uniformBuffer(
+                            0, QRhiShaderResourceBinding::VertexStage, m_ubuf.get()),
+                        QRhiShaderResourceBinding::sampledTexture(
+                            1, QRhiShaderResourceBinding::FragmentStage,
+                            m_d3dWrapTex.get(), m_sampler.get()),
+                    });
+                    m_srb->create();
+                } else {
+                    m_d3dWrapTex.reset();
+                }
+            }
+            if (m_d3dWrapTex) {
+                m_texSize = sz;       // 아스펙트 계산 + RGBA 파이프라인 선택용
+                drewNew = true;
+                if (!m_loggedPath) {
+                    std::fprintf(stderr, "[RhiVideoRenderer] render path = D3D11 GPU-convert\n");
+                    m_loggedPath = true;
+                }
+            }
+        }
+        m_hasD3dPending = false;
+    }
+#endif
 
     // ── RGBA 폴백 텍스처 업로드 (NV12를 안 쓸 때만) ──────────────────────────────
     if (!useNv12 && m_hasPending && !m_pending.isNull()) {

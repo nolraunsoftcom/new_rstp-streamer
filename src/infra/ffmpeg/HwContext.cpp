@@ -1,19 +1,49 @@
 #include "HwContext.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
+
+#if defined(_WIN32)
+extern "C" {
+#include <libavutil/hwcontext_d3d11va.h>
+}
+#include <d3d11.h>
+#include "src/infra/video/SharedGpuDevice.h"
+#endif
 
 namespace nv::infra {
 
 namespace {
 // 이 빌드가 타깃하는 hw 디바이스 타입과 hw 픽셀 포맷.
-// macOS는 VideoToolbox만 동작 보장. Windows(D3D11VA)는 Task6에서 활성.
+// macOS는 VideoToolbox. Windows는 D3D11VA.
 #if defined(__APPLE__)
 constexpr AVHWDeviceType kHwType = AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
 #elif defined(_WIN32)
-// Task6 스텁: 심볼은 존재하지만 실제 동작 검증은 Windows 브링업에서.
 constexpr AVHWDeviceType kHwType = AV_HWDEVICE_TYPE_D3D11VA;
 #else
 constexpr AVHWDeviceType kHwType = AV_HWDEVICE_TYPE_NONE;
+#endif
+
+#if defined(_WIN32)
+// D3D11VA frames context에 SHADER_RESOURCE 바인드를 추가한다 — 디코더 출력 텍스처를 SRV로
+// 읽어 GPU 변환(NV12→RGBA)하기 위해 필수. 기본(BIND_DECODER만)이면 CreateShaderResourceView가
+// 거부된다. 실패 시 FFmpeg 자동 frames로 두면 브리지 convert가 실패해 CPU 폴백된다(무해).
+void setupD3d11FramesCtx(AVCodecContext* ctx, AVPixelFormat hwPix) {
+    AVBufferRef* frames = nullptr;
+    if (avcodec_get_hw_frames_parameters(ctx, ctx->hw_device_ctx, hwPix, &frames) < 0 ||
+        frames == nullptr) {
+        return;
+    }
+    auto* fctx  = reinterpret_cast<AVHWFramesContext*>(frames->data);
+    auto* d3dfc = reinterpret_cast<AVD3D11VAFramesContext*>(fctx->hwctx);
+    d3dfc->BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+    if (av_hwframe_ctx_init(frames) < 0) {
+        av_buffer_unref(&frames);
+        return;
+    }
+    av_buffer_unref(&ctx->hw_frames_ctx);
+    ctx->hw_frames_ctx = frames;   // 소유권 이전(디코더가 이 frames pool 사용)
+}
 #endif
 } // namespace
 
@@ -28,7 +58,16 @@ AVPixelFormat HwContext::getFormat(AVCodecContext* ctx, const AVPixelFormat* fmt
     auto* self = static_cast<HwContext*>(ctx->opaque);
     const AVPixelFormat hw = self != nullptr ? self->m_hwPixFmt : AV_PIX_FMT_NONE;
     for (const AVPixelFormat* p = fmts; *p != AV_PIX_FMT_NONE; ++p) {
-        if (*p == hw) return *p;   // hw surface 포맷 선택
+        if (*p == hw) {   // hw surface 포맷 선택
+#if defined(_WIN32)
+            // 공유 디바이스로 만든 경우에만 SHADER_RESOURCE frames를 준비(zero-copy 경로).
+            // 자체 디바이스면 어차피 크로스 디바이스라 CPU 폴백 → frames 커스터마이즈 불필요.
+            if (self != nullptr && self->m_sharedDevice) {
+                setupD3d11FramesCtx(ctx, hw);
+            }
+#endif
+            return *p;
+        }
     }
     // hw 포맷이 후보에 없음 — SW 폴백 (libavcodec이 SW 디코더로 진행).
     return fmts[0];
@@ -64,11 +103,39 @@ bool HwContext::init(AVCodecContext* dec, const AVCodec* codec) {
 
     // 2) hw 디바이스 컨텍스트 생성.
     AVBufferRef* devCtx = nullptr;
+#if defined(_WIN32)
+    // Windows: 가능하면 QRhi 공유 ID3D11Device로 만든다(디코더 텍스처 = 렌더 디바이스 →
+    // GPU 변환 zero-copy). 미등록/실패 시 자체 디바이스로 폴백(크로스 디바이스 → CPU 변환).
+    if (void* shared = SharedGpuDevice::d3d11Device()) {
+        devCtx = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA);
+        if (devCtx != nullptr) {
+            auto* hwdc   = reinterpret_cast<AVHWDeviceContext*>(devCtx->data);
+            auto* d3dctx = reinterpret_cast<AVD3D11VADeviceContext*>(hwdc->hwctx);
+            d3dctx->device = static_cast<ID3D11Device*>(shared);
+            d3dctx->device->AddRef();   // FFmpeg가 디바이스 free 시 Release
+            if (av_hwdevice_ctx_init(devCtx) < 0) {
+                av_buffer_unref(&devCtx);   // 공유 init 실패 → 자체 디바이스 폴백
+                devCtx = nullptr;
+            } else {
+                m_sharedDevice = true;
+                std::fprintf(stderr, "[HwContext] D3D11VA on shared QRhi device (zero-copy)\n");
+            }
+        }
+    }
+    if (devCtx == nullptr) {
+        const int createRc = av_hwdevice_ctx_create(&devCtx, kHwType, nullptr, nullptr, 0);
+        if (createRc < 0) {
+            std::fprintf(stderr, "[HwContext] hwdevice create failed (rc=%d)\n", createRc);
+            return false;
+        }
+    }
+#else
     const int createRc = av_hwdevice_ctx_create(&devCtx, kHwType, nullptr, nullptr, 0);
     if (createRc < 0) {
         std::fprintf(stderr, "[HwContext] hwdevice create failed (rc=%d)\n", createRc);
         return false;   // 디바이스 없음/생성 실패 → SW 폴백
     }
+#endif
 
     // 3) 디코더에 배선: get_format 콜백 + hw_device_ctx ref + opaque(self).
     m_deviceCtx = devCtx;
@@ -92,6 +159,15 @@ void* HwContext::extractGpuHandle(const AVFrame* frame) {
 #else
     (void)frame;
     return nullptr;
+#endif
+}
+
+int HwContext::extractGpuIndex(const AVFrame* frame) {
+#if defined(_WIN32)
+    return static_cast<int>(reinterpret_cast<intptr_t>(frame->data[1]));
+#else
+    (void)frame;
+    return 0;
 #endif
 }
 

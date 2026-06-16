@@ -6,6 +6,7 @@
 #include <string>
 #include "src/app/ports/IVideoRenderer.h"
 #include "src/infra/video/VtMetalBridge.h"
+#include "src/infra/video/D3d11VideoBridge.h"
 
 QT_BEGIN_NAMESPACE
 class QRhi;
@@ -102,6 +103,19 @@ private:
     std::unique_ptr<QRhiTexture> m_inflightLuma;
     std::unique_ptr<QRhiTexture> m_inflightChroma;
     void* m_inflightHandle = nullptr;
+
+    // ── Windows D3D11 GPU 변환 경로 (NV12→RGBA, CPU 왕복 제거) ───────────────────
+    // 디코더 NV12 텍스처를 공유 QRhi 디바이스에서 RGBA로 GPU 변환해 createFrom으로 래핑,
+    // 기존 RGBA 파이프라인으로 그린다. macOS에선 m_d3dReady=false라 미사용.
+#if defined(_WIN32)
+    nv::infra::D3d11VideoBridge m_d3dBridge;
+    bool  m_d3dReady = false;
+    void* m_d3dRgbaTex = nullptr;            // 브리지 소유 RGBA D3D11 tex(non-owning, 최신)
+    QSize m_d3dRgbaSize;
+    bool  m_hasD3dPending = false;
+    std::unique_ptr<QRhiTexture> m_d3dWrapTex;   // 위 RGBA를 래핑한 RHI 텍스처(createFrom)
+    QSize m_d3dWrapSize;
+#endif
 
     bool m_loggedPath = false;   // "render path = ..." 1회 마커
     uint64_t m_seq = 0;
