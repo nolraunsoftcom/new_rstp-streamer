@@ -180,13 +180,12 @@ bool D3d11VideoBridge::convert(void* gpuFrame, int width, int height, RgbaTextur
     sd.Texture2DArray.FirstArraySlice = static_cast<UINT>(arrayIndex);
     sd.Texture2DArray.ArraySize = 1;
 
-    // NV12 평면 선택은 PlaneSlice로 명시(포맷만으론 불충분). Y=plane0/R8, UV=plane1/R8G8.
+    // NV12 평면 선택은 SRV 포맷으로 한다(D3D11은 PlaneSlice 미사용 — D3D12 개념).
+    // R8_UNORM=Y(plane0, full res), R8G8_UNORM=UV(plane1, half res).
     sd.Format = DXGI_FORMAT_R8_UNORM;
-    sd.Texture2DArray.PlaneSlice = 0;
     HRESULT hr = d->dev->CreateShaderResourceView(tex, &sd, &ySrv);
     if (SUCCEEDED(hr)) {
         sd.Format = DXGI_FORMAT_R8G8_UNORM;
-        sd.Texture2DArray.PlaneSlice = 1;
         hr = d->dev->CreateShaderResourceView(tex, &sd, &uvSrv);
     }
     if (FAILED(hr)) {
