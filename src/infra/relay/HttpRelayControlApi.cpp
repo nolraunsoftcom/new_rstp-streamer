@@ -18,7 +18,6 @@ HttpRelayControlApi::HttpRelayControlApi(std::string apiBase,
     : m_apiBase(std::move(apiBase)), m_timeout(timeout) {}
 
 std::vector<nv::app::RelayPathHealth> HttpRelayControlApi::pathsHealth() {
-    std::fprintf(stderr, "[relayapi] pathsHealth start %s\n", m_apiBase.c_str());
     // 기존엔 QNetworkAccessManager를 썼으나 워커 스레드 + Windows에서 프록시 탐지(WinHTTP/COM)·
     // 백엔드 스레드 기계장치 때문에 fail-fast(0xc0000409)가 간헐 발생했다(relay 채널일 때만 폴링).
     // localhost 단일 GET이므로 가벼운 QTcpSocket 동기 호출로 교체 — 이벤트루프/프록시/백엔드
@@ -31,8 +30,7 @@ std::vector<nv::app::RelayPathHealth> HttpRelayControlApi::pathsHealth() {
     QTcpSocket sock;
     sock.connectToHost(host, port);
     if (!sock.waitForConnected(tmo)) {
-        std::fprintf(stderr, "[relayapi] connect failed %s:%u\n", host.toUtf8().constData(), port);
-        return {};
+        return {};   // relay 미기동/포트 닫힘 — 정상적인 "relay down" 상태(폴링마다 호출되므로 무로그)
     }
 
     const QByteArray request =
@@ -54,13 +52,10 @@ std::vector<nv::app::RelayPathHealth> HttpRelayControlApi::pathsHealth() {
 
     const int hdrEnd = resp.indexOf("\r\n\r\n");
     if (hdrEnd < 0) {
-        std::fprintf(stderr, "[relayapi] no HTTP header end (resp=%lld bytes)\n",
-                     static_cast<long long>(resp.size()));
         return {};
     }
     const QByteArray statusLine = resp.left(resp.indexOf("\r\n"));
     if (!statusLine.contains(" 200")) {
-        std::fprintf(stderr, "[relayapi] non-200: %s\n", statusLine.constData());
         return {};
     }
     const QByteArray body = resp.mid(hdrEnd + 4);
