@@ -4,10 +4,14 @@
 #include <cstdint>
 
 #if defined(_WIN32)
+// d3d11.h를 extern "C" 밖에서 먼저 include한다 — d3d11.h는 D3D11_VIEWPORT/RECT/BOX 등에
+// C++ operator==/!= 오버로드를 정의하는데, hwcontext_d3d11va.h가 내부적으로 d3d11.h를
+// include하므로 그 안(extern "C")에서 처음 포함되면 연산자가 C 링키지로 묶여 C2733이 난다.
+// 먼저 C++ 링키지로 포함해 두면 include 가드가 재포함을 막아 문제를 피한다.
+#include <d3d11.h>
 extern "C" {
 #include <libavutil/hwcontext_d3d11va.h>
 }
-#include <d3d11.h>
 #include "src/infra/video/SharedGpuDevice.h"
 #endif
 
