@@ -544,6 +544,20 @@ void MainWindow::onRecordingFailed(QString channelName, QString reason)
                   }}});
 }
 
+void MainWindow::onChannelSaveFailed()
+{
+    // 채널 설정(JSON) 저장 실패 — 디스크 풀/권한 등. 사용자에게 명시 알림(#18).
+    Toast::show(centralWidget(),
+                QStringLiteral("채널 설정 저장 실패"),
+                QStringLiteral("디스크 공간/권한을 확인하세요. 변경이 다음 실행에 유지되지 않을 수 있습니다."),
+                Toast::Level::Error,
+                9000,
+                {{QStringLiteral("로그 보기"), [this]() {
+                      setRightPanelVisible(true);
+                      if (m_rightTabs) m_rightTabs->setCurrentIndex(2);  // ③ 로그 탭
+                  }}});
+}
+
 // 레거시 openFullscreenTab 미러 — 단, 우리 구조는 프레임을 IFrameSurfaceRegistry에서
 // channelId로 공유하므로 전체화면 뷰는 2차 스트림 없이 같은 프레임을 큰 위젯으로 렌더한다.
 void MainWindow::openFullscreenTab(const std::string& id)

@@ -6,22 +6,11 @@
 #include <iomanip>
 #include <sstream>
 
+#include "src/domain/recording/FileName.h"   // 공용 sanitizeFileName(app·infra 동일 규칙)
+
 // 순수 app 레이어 — Qt/FFmpeg include 없음.
 // 경로 생성은 C++ stdlib(chrono + ctime + sstream)만 사용.
 namespace nv::app {
-
-// 채널명에서 파일명에 안전하지 않은 문자를 '_'로 치환한다.
-static std::string sanitizeName(const std::string& name) {
-    std::string s = name.empty() ? "channel" : name;
-    for (char& c : s) {
-        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
-            c == '"' || c == '<' || c == '>' || c == '|' ||
-            static_cast<unsigned char>(c) < 0x20) {
-            c = '_';
-        }
-    }
-    return s;
-}
 
 RecordingController::RecordingController(IRecordingSink& sink,
                                          IClock& clock,
@@ -76,7 +65,7 @@ std::string RecordingController::makePath(const std::string& channelName) const 
         if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') dir += '/';
     }
 
-    return dir + sanitizeName(channelName) + '_' + ts + seqbuf + ".mkv";
+    return dir + nv::domain::sanitizeFileName(channelName) + '_' + ts + seqbuf + ".mkv";
 }
 
 void RecordingController::notify(const std::string& channelId, nv::domain::RecordingState s) {
@@ -107,6 +96,11 @@ int RecordingController::lastSegmentDurationSec(const std::string& channelId) co
     return it != m_channels.end() ? it->second.lastDurationSec : 0;
 }
 
+std::string RecordingController::lastFailureReason(const std::string& channelId) const {
+    auto it = m_channels.find(channelId);
+    return it != m_channels.end() ? it->second.lastFailure : std::string{};
+}
+
 void RecordingController::doStart(const std::string& channelId, const std::string& channelName) {
     const std::string path = makePath(channelName);
     const bool ok = m_sink.startRecording(channelId, path);
@@ -123,8 +117,11 @@ void RecordingController::doStart(const std::string& channelId, const std::strin
         // 재시도 경로(D1)가 이 카운터를 공유하므로 영구 실패가 폭주하지 않는다.
         if (++ch.startFailures >= kMaxStartFailures && ch.armed) {
             ch.armed = false;
+            ch.lastFailure = "녹화 시작 반복 실패 — 중단(사용자 재시도 필요)";
             m_logger.log(LogLevel::Warn, channelId, "RecordingController",
                          "녹화 시작 반복 실패 — 중단, 사용자 재시도 필요");
+        } else {
+            ch.lastFailure = "녹화 시작 실패";   // C: 실패 토스트로 가시화(#18/#25)
         }
         notify(channelId, nv::domain::RecordingState::Idle);
         return;
@@ -134,6 +131,7 @@ void RecordingController::doStart(const std::string& channelId, const std::strin
     ch.segmentStart = m_clock.now();
     ch.currentPath  = path;   // 토스트 메트릭: 활성 세그먼트 경로 기록(Idle 전이 시 캡처)
     ch.startFailures = 0;   // D2: 성공 시 백오프 카운터 리셋
+    ch.lastFailure.clear();   // C: 정상 시작 — 직전 실패 사유 해제
     ch.retryStart = false;  // D1: 정상 녹화 중 — 재시도 게이트 해제
     // P4d: sink.isRecording이 이미 true(예: 테스트용 페이크)면 즉시 Recording,
     // false이면 Starting(요청됨, 첫 키프레임 대기) — tick()이 전환을 완료한다.
@@ -151,6 +149,7 @@ void RecordingController::doStop(const std::string& channelId) {
     auto& ch  = m_channels[channelId];
     ch.state  = nv::domain::RecordingState::Idle;
     ch.retryStart = false;   // D1: 명시적 stop(토글/드롭) — tick 재시도 게이트 해제
+    ch.lastFailure.clear();  // C: 정상 중지 — "녹화 저장됨" 토스트(실패 아님)
     notify(channelId, nv::domain::RecordingState::Idle);
 }
 
@@ -182,6 +181,7 @@ void RecordingController::onChannelRemoved(const std::string& channelId) {
         it->second.state == nv::domain::RecordingState::Starting) {
         // best-effort: 소스가 곧 파괴되므로 실패 가능, 유령 상태 방지가 핵심
         m_sink.stopRecording(channelId);
+        it->second.lastFailure.clear();   // C: 채널 삭제는 실패 아님(정상 마감)
         notify(channelId, nv::domain::RecordingState::Idle);
     }
     m_channels.erase(it);
@@ -243,6 +243,7 @@ void RecordingController::tick() {
                                  "Starting 상태에서 녹화 미확인 — Idle로 수렴(REC 해제)");
                     m_sink.stopRecording(id);
                     ch.state = nv::domain::RecordingState::Idle;
+                    ch.lastFailure = "녹화 시작 실패 (키프레임 미확인)";   // C: 실패 토스트
                     notify(id, nv::domain::RecordingState::Idle);
                 }
             }
@@ -274,6 +275,7 @@ void RecordingController::tick() {
             // 다음 tick(D1)/onStreaming 시 재시도가 맞다(로그로 가시화됨, D2 백오프로 제한).
             m_sink.stopRecording(id);
             ch.state = nv::domain::RecordingState::Idle;
+            ch.lastFailure = "녹화 중단 (저장 실패)";   // C: 실패 토스트(거짓 "저장됨" 방지)
             notify(id, nv::domain::RecordingState::Idle);
             continue;
         }
@@ -294,10 +296,12 @@ void RecordingController::tick() {
             if (++ch.diskErrors >= kMaxDiskErrors && ch.armed) {
                 ch.armed = false;
                 ch.retryStart = false;   // 재시도 중단 — 디스크가 비워질 때까지 멈춤
+                ch.lastFailure = "디스크/쓰기 오류 반복 — 녹화 중단(공간 확인)";   // C
                 m_logger.log(LogLevel::Warn, id, "RecordingController",
                              "디스크/쓰기 오류 반복 — 녹화 중단, 디스크 공간 확인 필요");
             } else {
                 ch.retryStart = true;   // D1: 디스크 복구 시 tick이 새 세그먼트로 자동 재개
+                ch.lastFailure = "디스크/쓰기 오류로 녹화 중단";   // C: 실패 토스트
             }
             notify(id, nv::domain::RecordingState::Idle);
             continue;

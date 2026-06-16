@@ -70,6 +70,8 @@ public slots:
     void onRecordingSaved(QString channelName, QString filePath, bool autoSaved,
                           qint64 bytes, int durationSec);
     void onRecordingFailed(QString channelName, QString reason);
+    // 채널 설정 저장 실패 토스트(#18) — control→UI queued.
+    void onChannelSaveFailed();
 
 protected:
     void resizeEvent(QResizeEvent* event) override;

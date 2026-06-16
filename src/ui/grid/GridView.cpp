@@ -568,8 +568,7 @@ void GridView::updateRecordingState(const QString& channelId, nv::domain::Record
                                     : nv::ui::style::TOOL_BUTTON);
     t->recBtn->setToolTip(active ? QStringLiteral("녹화 중지") : QStringLiteral("녹화 시작"));
 
-    // REC 뱃지 — Starting(노랑 "● REC…"), Recording(빨강 "● REC hh:mm:ss"),
-    // Stopping(노랑 "● 저장 중…"), Idle(숨김). (레거시 VlcWidget::updateRecordUi 패리티)
+    // REC 뱃지 — Starting(노랑 "● REC…"), Recording(빨강 "● REC hh:mm:ss"), Idle(숨김).
     if (state == RecordingState::Starting) {
         t->recBadge->setStyleSheet(nv::ui::style::REC_BADGE_STARTING);
         t->recBadge->setText(QStringLiteral("● REC…"));
@@ -577,10 +576,6 @@ void GridView::updateRecordingState(const QString& channelId, nv::domain::Record
     } else if (state == RecordingState::Recording) {
         t->recBadge->setStyleSheet(nv::ui::style::REC_BADGE_ACTIVE);
         t->recBadge->setText(QStringLiteral("● REC %1").arg(formatElapsed(0)));
-        t->recBadge->show();
-    } else if (state == RecordingState::Stopping) {
-        t->recBadge->setStyleSheet(nv::ui::style::REC_BADGE_STARTING);
-        t->recBadge->setText(QStringLiteral("● 저장 중…"));
         t->recBadge->show();
     } else {
         t->recBadge->hide();

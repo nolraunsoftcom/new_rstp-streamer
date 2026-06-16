@@ -52,6 +52,11 @@ public:
     // 직전에 마감된 세그먼트의 길이(초). 시작~중지 시각차(IClock 기준). 없으면 0.
     int lastSegmentDurationSec(const std::string& channelId) const;
 
+    // 직전 Idle 전이가 "실패"였으면 사유 문자열, "정상 중지"였으면 빈 문자열.
+    // notify(Idle) 직전에 갱신되므로 옵저버가 같은 호출에서 조회해 실패/성공 토스트를 구분한다.
+    // (디스크 오류·시작 실패·키프레임 미확인 등 비정상 종료를 "녹화 저장됨"으로 오인하지 않게 함.)
+    std::string lastFailureReason(const std::string& channelId) const;
+
     // UI 표시용 옵저버 — 상태 변화 시 호출된다.
     void setObserver(RecordingObserver observer);
 
@@ -64,6 +69,7 @@ private:
         std::string currentPath;                            // 활성 세그먼트 파일 경로(doStart에서 설정, Idle 캡처 후 비움)
         std::string lastPath;                               // 직전 마감 세그먼트 경로(토스트 표시용)
         int lastDurationSec{0};                             // 직전 마감 세그먼트 길이(초)
+        std::string lastFailure;                            // 직전 Idle 전이의 실패 사유(정상 중지면 빈 문자열)
         // D2 백오프: doStart 연속 실패 횟수. kMaxStartFailures 도달 시 armed를 내려
         // 무한 재시도·로그 스팸을 막는다. doStart 성공 시 0으로 리셋.
         unsigned startFailures{0};

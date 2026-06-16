@@ -51,6 +51,8 @@ public:
 
     void setListChangedObserver(std::function<void()> obs) { m_listChanged = std::move(obs); }
     void setSnapshotObserver(std::function<void(const std::string&, const ChannelSnapshot&)> obs);
+    // 채널 설정 영속(저장) 실패 알림 — UI 토스트로 가시화(부채 #18). control 스레드에서 호출됨.
+    void setSaveFailedObserver(std::function<void()> obs) { m_saveFailed = std::move(obs); }
 
 private:
     struct Entry {
@@ -75,6 +77,7 @@ private:
     nv::domain::StallPolicy m_stall;
     std::map<std::string, Entry> m_entries;        // id → entry
     std::function<void()> m_listChanged;
+    std::function<void()> m_saveFailed;
     std::function<void(const std::string&, const ChannelSnapshot&)> m_snapshotObserver;
     int m_maxChannels;
 };

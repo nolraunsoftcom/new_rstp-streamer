@@ -802,3 +802,60 @@ TEST_CASE("D10 백오프(회귀): 짧은 무오류 윈도우(avio 버퍼)가 있
                                   e.message.find("반복") != std::string::npos; });
     CHECK(disarmWarn);
 }
+
+// ── C(#18/#25): lastFailureReason — 실패/성공 토스트 구분 ─────────────────────
+
+TEST_CASE("C: 정상 중지는 lastFailureReason이 비어있다(성공 토스트)") {
+    Fixture f;
+    f.ctrl.toggle("ch1", "Cam1");   // start
+    REQUIRE(f.ctrl.stateOf("ch1") == RecordingState::Recording);
+    f.ctrl.toggle("ch1", "Cam1");   // 정상 중지
+    REQUIRE(f.ctrl.stateOf("ch1") == RecordingState::Idle);
+    CHECK(f.ctrl.lastFailureReason("ch1").empty());
+}
+
+TEST_CASE("C: doStart 실패는 lastFailureReason을 설정한다(실패 토스트)") {
+    FakeClock clock;
+    FailingRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{600}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    sink.failNext = true;
+    ctrl.toggle("ch1", "Cam1");   // 시작 시도 → 실패
+    CHECK(ctrl.stateOf("ch1") == RecordingState::Idle);
+    CHECK_FALSE(ctrl.lastFailureReason("ch1").empty());   // 사유 stash됨 → 실패 토스트
+}
+
+TEST_CASE("C: 디스크 오류 중단은 lastFailureReason을 설정한다(거짓 성공 방지)") {
+    FakeClock clock;
+    FakeRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{600}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    ctrl.toggle("ch1", "Cam1");
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Recording);
+    sink.setRecordingError("ch1", true);
+    clock.advance(std::chrono::seconds{4});
+    ctrl.tick();
+
+    REQUIRE(ctrl.stateOf("ch1") == RecordingState::Idle);
+    // 디스크 오류로 Recording→Idle인데 사유가 있어야 "녹화 저장됨"으로 오인하지 않는다.
+    CHECK_FALSE(ctrl.lastFailureReason("ch1").empty());
+}
+
+TEST_CASE("C: 실패 후 명시적 중지(toggle)는 직전 실패 사유를 해제한다") {
+    FakeClock clock;
+    FailingRecordingSink sink;
+    FakeLogger logger;
+    SegmentPolicy policy{std::chrono::seconds{600}, true};
+    RecordingController ctrl{sink, clock, logger, policy};
+
+    sink.failNext = true;
+    ctrl.toggle("ch1", "Cam1");   // 시작 실패 → 사유 설정, armed 유지
+    REQUIRE_FALSE(ctrl.lastFailureReason("ch1").empty());
+
+    ctrl.toggle("ch1", "Cam1");   // armed라 이번 toggle은 중지(doStop) — 사유 해제
+    CHECK(ctrl.lastFailureReason("ch1").empty());
+}

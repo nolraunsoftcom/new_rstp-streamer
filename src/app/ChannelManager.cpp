@@ -250,9 +250,10 @@ void ChannelManager::setSnapshotObserver(
 }
 
 void ChannelManager::persist() {
-    if (!m_repo.save(configs())) {  // U3: 저장 실패 시 경고 로그
+    if (!m_repo.save(configs())) {  // U3: 저장 실패 시 경고 로그 + UI 토스트(#18)
         m_logger.log(LogLevel::Warn, "", "ChannelManager", "channel save failed",
                      nv::domain::DiagnosisReason::DiskFull);
+        if (m_saveFailed) m_saveFailed();
     }
 }
 

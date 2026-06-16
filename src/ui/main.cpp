@@ -335,6 +335,11 @@ int main(int argc, char** argv) {
     // restore post보다 먼저 post되도록 순서 유지 (직렬 보장)
     executor.post([&] {
         mgr.setListChangedObserver(pushList);
+        // 채널 설정 저장 실패 → UI 토스트(#18). control 스레드에서 호출되므로 queued로 UI 진입.
+        mgr.setSaveFailedObserver([&]() {
+            if (winPtr != nullptr)
+                QMetaObject::invokeMethod(winPtr, "onChannelSaveFailed", Qt::QueuedConnection);
+        });
         mgr.setSnapshotObserver([&, prevState](const std::string& id,
                                                const nv::app::ChannelSnapshot& s) {
             // 끊김 전이 감지: Streaming/SessionOpen 등 활성 상태에서 Reconnecting/Stalled로
@@ -386,41 +391,37 @@ int main(int argc, char** argv) {
                         : nv::domain::RecordingState::Idle;
                 }();
 
-                if (state == nv::domain::RecordingState::Idle
-                    && prev == nv::domain::RecordingState::Recording) {
-                    // Recording → Idle: 녹화 정상 저장됨
-                    // 채널명은 control 스레드(mgr.configs() 안전) 여기서 조회
+                if (state == nv::domain::RecordingState::Idle) {
+                    // Idle 전이: 컨트롤러가 stash한 실패 사유로 실패/성공을 구분한다.
+                    // (디스크 오류·시작 실패·키프레임 미확인 등 비정상 종료를 "녹화 저장됨"으로
+                    //  오인하지 않게 함 — 부채 #18/#25.) 사유가 비면 정상 중지.
+                    // 채널명은 control 스레드(mgr.configs() 안전) 여기서 조회.
                     std::string name;
                     for (const auto& c : mgr.configs()) {
                         if (c.id == id) { name = c.name; break; }
                     }
-                    // 메트릭: 컨트롤러가 notify(Idle)에서 캡처한 직전 세그먼트 경로/길이.
-                    // bytes는 stopRecording이 비동기(디코드 스레드가 다음 패킷에서 파일 마감)라
-                    // 여기서 stat하면 너무 이르다 → UI 슬롯(큐 이후)에서 파일 크기를 읽는다.
-                    const std::string recPath = recCtrl.lastSegmentPath(id);
-                    const int recDur = recCtrl.lastSegmentDurationSec(id);
-                    QMetaObject::invokeMethod(winPtr, "onRecordingSaved",
-                        Qt::QueuedConnection,
-                        Q_ARG(QString, QString::fromStdString(name)),
-                        Q_ARG(QString, QString::fromStdString(recPath)),
-                        Q_ARG(bool, false),          // autoSaved: 롤오버 구분 불가 — false
-                        Q_ARG(qint64, 0),            // bytes: UI에서 파일 stat으로 산출
-                        Q_ARG(int, recDur));
-                } else if (state == nv::domain::RecordingState::Idle
-                           && prev == nv::domain::RecordingState::Idle
-                           && recCtrl.stateOf(id) == nv::domain::RecordingState::Idle) {
-                    // Idle → Idle: doStart 실패 경로 (녹화 실패)
-                    // armed 상태는 공개 API로 확인 불가 — stateOf만 사용 가능.
-                    // 단, 이 경로는 doStart 실패(ok==false) 시에만 발생한다.
-                    // prev==Idle && cur==Idle 전이는 오직 doStart-fail notify뿐이므로 안전.
-                    std::string name;
-                    for (const auto& c : mgr.configs()) {
-                        if (c.id == id) { name = c.name; break; }
+                    const std::string failReason = recCtrl.lastFailureReason(id);
+                    if (!failReason.empty()) {
+                        QMetaObject::invokeMethod(winPtr, "onRecordingFailed",
+                            Qt::QueuedConnection,
+                            Q_ARG(QString, QString::fromStdString(name)),
+                            Q_ARG(QString, QString::fromStdString(failReason)));
+                    } else if (prev == nv::domain::RecordingState::Recording) {
+                        // Recording → Idle (정상 중지): 녹화 저장됨.
+                        // 메트릭: 컨트롤러가 notify(Idle)에서 캡처한 직전 세그먼트 경로/길이.
+                        // bytes는 stopRecording이 비동기(디코드 스레드가 다음 패킷에서 파일 마감)라
+                        // 여기서 stat하면 너무 이르다 → UI 슬롯(큐 이후)에서 파일 크기를 읽는다.
+                        const std::string recPath = recCtrl.lastSegmentPath(id);
+                        const int recDur = recCtrl.lastSegmentDurationSec(id);
+                        QMetaObject::invokeMethod(winPtr, "onRecordingSaved",
+                            Qt::QueuedConnection,
+                            Q_ARG(QString, QString::fromStdString(name)),
+                            Q_ARG(QString, QString::fromStdString(recPath)),
+                            Q_ARG(bool, false),          // autoSaved: 롤오버 구분 불가 — false
+                            Q_ARG(qint64, 0),            // bytes: UI에서 파일 stat으로 산출
+                            Q_ARG(int, recDur));
                     }
-                    QMetaObject::invokeMethod(winPtr, "onRecordingFailed",
-                        Qt::QueuedConnection,
-                        Q_ARG(QString, QString::fromStdString(name)),
-                        Q_ARG(QString, QStringLiteral("녹화 시작 실패")));
+                    // (Starting→Idle 정상 — 사용자가 키프레임 전 중지 — 토스트 없음)
                 }
 
                 (*prevRecState)[id] = state;
@@ -627,6 +628,7 @@ int main(int argc, char** argv) {
     executor.post([&] {
         mgr.setSnapshotObserver(nullptr);
         mgr.setListChangedObserver(nullptr);
+        mgr.setSaveFailedObserver(nullptr);
         mgr.disconnectAll();
     });
     executor.drain();

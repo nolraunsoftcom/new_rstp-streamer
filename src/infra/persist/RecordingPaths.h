@@ -5,6 +5,7 @@
 #include <QString>
 #include <atomic>
 #include <string>
+#include "src/domain/recording/FileName.h"   // 공용 sanitizeFileName(app·infra 동일 규칙)
 
 namespace nv::infra {
 
@@ -40,18 +41,10 @@ public:
     }
 
 private:
-    // 파일명에 안전하지 않은 문자를 '_'로 치환한다.
+    // 파일명 살균 — 공용 도메인 규칙(nv::domain::sanitizeFileName) 사용.
+    // 금지 문자는 모두 ASCII라 UTF-8 바이트 단위 치환이 안전(멀티바이트 보존).
     static QString sanitize(const std::string& name) {
-        QString s = QString::fromStdString(name);
-        if (s.isEmpty()) s = QStringLiteral("channel");
-        for (QChar& c : s) {
-            const ushort u = c.unicode();
-            if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
-                c == '"' || c == '<' || c == '>' || c == '|' || u < 0x20) {
-                c = QLatin1Char('_');
-            }
-        }
-        return s;
+        return QString::fromStdString(nv::domain::sanitizeFileName(name));
     }
 
     static std::string makePath(const std::string& channelName, const char* ext) {
