@@ -355,8 +355,10 @@ void MainWindow::onSnapshot(QString channelId, QString state, int attempts, QLis
                             double bitrateKbps, qlonglong droppedFrames,
                             qlonglong decodedFrames, qlonglong displayedFrames,
                             qlonglong readBytesTotal) {
-    m_grid->updateTileStatus(channelId, state, attempts, stages, pps, msSinceLastPacket, reason);
-    m_channelPanel->updateStatus(channelId, state, reason);
+    Q_UNUSED(stages);   // 6단계 신호 점은 더 이상 표시하지 않음(타일/채널목록 모두 제거).
+    m_grid->updateTileStatus(channelId, state, attempts);
+    // 타일에서 뗀 패킷정보를 좌측 채널목록 아이템 하단에 텍스트로 표시(레거시 패리티).
+    m_channelPanel->updateStatus(channelId, state, reason, pps, msSinceLastPacket);
     // A1: Streaming 여부 맵 갱신
     m_streaming[channelId] = (state == QStringLiteral("Streaming"));
     // 상태바/채널정보 집계용 채널별 지표 캐시

@@ -45,9 +45,8 @@ public:
 
     // 채널 목록 변경 시 호출: diff 기반 타일 추가/삭제 후 relayout()
     void rebuild(const std::vector<nv::domain::ChannelConfig>& configs, int manualColumns);
-    void updateTileStatus(const QString& channelId, const QString& state, int attempts,
-                          const QList<int>& stages, double pps, qlonglong msSince,
-                          const QString& reason);
+    // 타일 정보바는 채널명+상태만 표시한다(패킷/신호 표시는 좌측 채널목록으로 이전 — 레거시 패리티).
+    void updateTileStatus(const QString& channelId, const QString& state, int attempts);
     // M3-5: 녹화 상태 변경 → 정보바 ● 버튼 + REC 뱃지 갱신
     void updateRecordingState(const QString& channelId, nv::domain::RecordingState state);
 
@@ -59,6 +58,8 @@ protected:
 private:
     // 배치만 갱신 — 위젯 파괴 절대 금지
     void relayout();
+    // 녹화 중 타일의 REC 뱃지 경과시간(hh:mm:ss)을 1초마다 갱신한다.
+    void tickRecordingBadges();
     // m_content 좌표 → 그리드 셀 index(캐시된 레이아웃 기준). 범위 밖이면 -1.
     int cellIndexAt(const QPoint& pos) const;
 
@@ -83,6 +84,9 @@ private:
     // Oscillation fix: re-entrancy guard + resize coalescing
     bool m_inRelayout      = false;
     bool m_relayoutQueued  = false;
+
+    // 녹화 경과시간 1초 틱 — 녹화 중인 타일이 하나라도 있을 때만 가동.
+    QTimer* m_recTick = nullptr;
 };
 
 } // namespace nv::ui

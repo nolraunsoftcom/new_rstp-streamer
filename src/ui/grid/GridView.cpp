@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <set>
 #include <QApplication>
+#include <QDateTime>
 #include <QDrag>
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
@@ -49,26 +50,29 @@ static QString statusTextFor(const QString& state) {
     return state;
 }
 
-// 패킷 경과 시간 기반 색 (레거시 팔레트)
-static const char* packetColor(qlonglong msSince) {
-    if (msSince < 0)    return "#666";      // 이력없음
-    if (msSince < 1000) return "#12823b";   // 정상
-    if (msSince < 3000) return "#e8a838";   // 1~3s
-    return "#d13438";                        // 3s+
+// 녹화 경과시간 포맷 hh:mm:ss (레거시 VlcWidget::formatElapsed)
+static QString formatElapsed(int seconds) {
+    if (seconds < 0) seconds = 0;
+    const int h = seconds / 3600;
+    const int m = (seconds / 60) % 60;
+    const int s = seconds % 60;
+    return QStringLiteral("%1:%2:%3")
+        .arg(h, 2, 10, QLatin1Char('0'))
+        .arg(m, 2, 10, QLatin1Char('0'))
+        .arg(s, 2, 10, QLatin1Char('0'));
 }
 
 // ── Tile: 정보바 + VideoTileWidget ───────────────────────────────────────
 struct GridView::Tile : public QWidget {
     QLabel*          nameLabel   = nullptr;
-    QLabel*          packetLabel = nullptr;
-    QLabel*          stageDots   = nullptr;
     QPushButton*     snapBtn     = nullptr;
     QPushButton*     recBtn      = nullptr;
-    QLabel*          recBadge    = nullptr;   // M3-5: "REC" 빨강 뱃지
+    QLabel*          recBadge    = nullptr;   // "● REC hh:mm:ss" 녹화 경과 뱃지
     VideoTileWidget* video       = nullptr;
     std::string      channelId;
     QString          name;
     nv::domain::RecordingState recState{nv::domain::RecordingState::Idle};  // 메뉴 라벨(녹화 시작/중지)용
+    qint64           recStartMs  = 0;         // 녹화 시작 시각(epoch ms) — 경과시간 계산용
 
     // ── DnD(위치 교환) — 타일은 드래그 출발지. 드롭은 GridView(콘텐츠)가 위치 기반 처리. ──
     QPoint           dragStartPos;            // 좌클릭 누른 지점(드래그 임계 판정용)
@@ -91,15 +95,6 @@ struct GridView::Tile : public QWidget {
         nameLabel->setTextFormat(Qt::PlainText);   // S3: 채널명 HTML 인젝션 방지
         nameLabel->setStyleSheet(
             QStringLiteral("color:#222; font-size:11px; font-weight:bold;"));
-
-        stageDots = new QLabel(QStringLiteral("······"), infoBar);
-        stageDots->setStyleSheet(
-            QStringLiteral("font-size:10px; background:transparent; padding: 0 2px;"));
-        stageDots->setTextFormat(Qt::RichText);
-
-        packetLabel = new QLabel(QStringLiteral("패킷 —"), infoBar);
-        packetLabel->setStyleSheet(
-            QStringLiteral("color:#666; font-size:10px; background:transparent;"));
 
         snapBtn = new QPushButton(QStringLiteral("📷"), infoBar);
         snapBtn->setFixedSize(24, 20);
@@ -125,8 +120,6 @@ struct GridView::Tile : public QWidget {
         barRow->addWidget(nameLabel);
         barRow->addStretch();
         barRow->addWidget(recBadge);
-        barRow->addWidget(stageDots);
-        barRow->addWidget(packetLabel);
         barRow->addWidget(snapBtn);
         barRow->addWidget(recBtn);
 
@@ -202,6 +195,11 @@ GridView::GridView(nv::app::IFrameSurfaceRegistry* registry, Callbacks cb,
     m_dropHighlight->setStyleSheet(QStringLiteral(
         "background-color: rgba(0,120,212,40); border: 2px solid #0078d4;"));
     m_dropHighlight->hide();
+
+    // 녹화 경과시간 1초 틱 — 녹화 중인 타일이 있을 때만 start() (updateRecordingState에서 제어).
+    m_recTick = new QTimer(this);
+    m_recTick->setInterval(1000);
+    connect(m_recTick, &QTimer::timeout, this, &GridView::tickRecordingBadges);
 }
 
 int GridView::cellIndexAt(const QPoint& pos) const {
@@ -533,62 +531,19 @@ void GridView::rebuild(const std::vector<nv::domain::ChannelConfig>& configs,
     relayout();
 }
 
-void GridView::updateTileStatus(const QString& channelId, const QString& state, int attempts,
-                                const QList<int>& stages, double pps, qlonglong msSince,
-                                const QString& reason)
+void GridView::updateTileStatus(const QString& channelId, const QString& state, int attempts)
 {
     auto it = m_tiles.find(channelId.toStdString());
     if (it == m_tiles.end()) return;
     Tile* t = it->second;
 
-    // ── 6단계 점 인디케이터 (StageState: 0=Unknown, 1=Ok, 2=Failed, 3=NotApplicable)
-    static const char* kStageNames[] = {"장비도달", "Relay수신", "RTSP세션", "패킷수신", "디코딩", "표시"};
-    QString dots;
-    QString tooltip;
-    for (int i = 0; i < stages.size() && i < 6; ++i) {
-        const int s = stages[i];
-        if (s == 3) {
-            dots += QStringLiteral("<span style='color:#bbb'>–</span>");
-            tooltip += QStringLiteral("%1: 해당없음\n").arg(QLatin1String(kStageNames[i]));
-        } else {
-            const char* color = (s == 1) ? "#12823b" : (s == 2) ? "#d13438" : "#999";
-            dots += QStringLiteral("<span style='color:%1'>●</span>").arg(QLatin1String(color));
-            const QString stateStr = (s == 1) ? QStringLiteral("정상")
-                                   : (s == 2) ? QStringLiteral("실패")
-                                              : QStringLiteral("알수없음");
-            if (s == 2 && reason != QStringLiteral("None") && !reason.isEmpty()) {
-                tooltip += QStringLiteral("%1: %2(%3)\n").arg(QLatin1String(kStageNames[i]), stateStr, reason);
-            } else {
-                tooltip += QStringLiteral("%1: %2\n").arg(QLatin1String(kStageNames[i]), stateStr);
-            }
-        }
-    }
-    t->stageDots->setText(dots);
-    t->stageDots->setToolTip(tooltip.trimmed());
-
-    // 채널명 (시도 횟수 병기)
+    // 정보바는 채널명 + 상태만 표시한다(패킷/신호 점 표시는 좌측 채널목록으로 이전).
     if (attempts > 0) {
         t->nameLabel->setText(
             QStringLiteral("%1  [%2 %3회]").arg(t->name, statusTextFor(state)).arg(attempts));
     } else {
         t->nameLabel->setText(
             QStringLiteral("%1  [%2]").arg(t->name, statusTextFor(state)));
-    }
-
-    // 패킷 라벨
-    if (msSince < 0) {
-        t->packetLabel->setText(QStringLiteral("패킷 —"));
-        t->packetLabel->setStyleSheet(
-            QStringLiteral("color:%1; font-size:10px; background:transparent;")
-                .arg(packetColor(-1)));
-    } else {
-        t->packetLabel->setText(
-            QStringLiteral("패킷 %1/s · %2초 전")
-                .arg(pps, 0, 'f', 1)
-                .arg(msSince / 1000.0, 0, 'f', 1));
-        t->packetLabel->setStyleSheet(
-            QStringLiteral("color:%1; font-size:10px; font-weight:bold; background:transparent;")
-                .arg(QLatin1String(packetColor(msSince))));
     }
 }
 
@@ -597,9 +552,14 @@ void GridView::updateRecordingState(const QString& channelId, nv::domain::Record
     auto it = m_tiles.find(channelId.toStdString());
     if (it == m_tiles.end()) return;
     Tile* t = it->second;
-    t->recState = state;   // 우클릭 메뉴 "녹화 시작/중지" 라벨용
 
     using nv::domain::RecordingState;
+    // Idle→Recording 전이 시점에 시작 시각을 기록(경과시간 0부터). 이미 녹화 중이면 유지.
+    if (state == RecordingState::Recording && t->recState != RecordingState::Recording) {
+        t->recStartMs = QDateTime::currentMSecsSinceEpoch();
+    }
+    t->recState = state;   // 우클릭 메뉴 "녹화 시작/중지" 라벨용
+
     const bool active = (state == RecordingState::Recording ||
                          state == RecordingState::Starting);
 
@@ -608,15 +568,40 @@ void GridView::updateRecordingState(const QString& channelId, nv::domain::Record
                                     : nv::ui::style::TOOL_BUTTON);
     t->recBtn->setToolTip(active ? QStringLiteral("녹화 중지") : QStringLiteral("녹화 시작"));
 
-    // P4d: REC 뱃지 — Starting(노랑), Recording(빨강), Idle(숨김)
+    // REC 뱃지 — Starting(노랑 "● REC…"), Recording(빨강 "● REC hh:mm:ss"),
+    // Stopping(노랑 "● 저장 중…"), Idle(숨김). (레거시 VlcWidget::updateRecordUi 패리티)
     if (state == RecordingState::Starting) {
         t->recBadge->setStyleSheet(nv::ui::style::REC_BADGE_STARTING);
+        t->recBadge->setText(QStringLiteral("● REC…"));
         t->recBadge->show();
     } else if (state == RecordingState::Recording) {
         t->recBadge->setStyleSheet(nv::ui::style::REC_BADGE_ACTIVE);
+        t->recBadge->setText(QStringLiteral("● REC %1").arg(formatElapsed(0)));
+        t->recBadge->show();
+    } else if (state == RecordingState::Stopping) {
+        t->recBadge->setStyleSheet(nv::ui::style::REC_BADGE_STARTING);
+        t->recBadge->setText(QStringLiteral("● 저장 중…"));
         t->recBadge->show();
     } else {
         t->recBadge->hide();
+    }
+
+    // 녹화 중인 타일이 하나라도 있으면 1초 틱 가동, 없으면 정지(자원 절약).
+    const bool anyRecording = std::any_of(
+        m_tiles.begin(), m_tiles.end(),
+        [](const auto& kv) { return kv.second->recState == RecordingState::Recording; });
+    if (anyRecording && !m_recTick->isActive())      m_recTick->start();
+    else if (!anyRecording && m_recTick->isActive()) m_recTick->stop();
+}
+
+void GridView::tickRecordingBadges()
+{
+    using nv::domain::RecordingState;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    for (auto& [id, t] : m_tiles) {
+        if (t->recState != RecordingState::Recording) continue;
+        const int elapsed = static_cast<int>((now - t->recStartMs) / 1000);
+        t->recBadge->setText(QStringLiteral("● REC %1").arg(formatElapsed(elapsed)));
     }
 }
 

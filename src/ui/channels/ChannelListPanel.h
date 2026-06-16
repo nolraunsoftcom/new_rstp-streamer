@@ -29,8 +29,10 @@ public:
 
     // control → UI (queued): 채널 목록 전체 갱신
     void updateChannels(const std::vector<nv::domain::ChannelConfig>& configs);
-    // control → UI (queued): 해당 채널 상태 텍스트 갱신
-    void updateStatus(const QString& channelId, const QString& state, const QString& reason);
+    // control → UI (queued): 해당 채널 상태 + 패킷 정보 갱신.
+    // pps: 패킷/초, msSince: 마지막 패킷 경과(ms, <0=이력없음).
+    void updateStatus(const QString& channelId, const QString& state, const QString& reason,
+                      double pps, qlonglong msSince);
 
 private:
     Callbacks m_cb;

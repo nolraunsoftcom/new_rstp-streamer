@@ -1,17 +1,102 @@
 #include "ChannelListPanel.h"
+#include <QAbstractItemView>
+#include <QAbstractTextDocumentLayout>
+#include <QApplication>
 #include <QDropEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPushButton>
+#include <QStyle>
+#include <QStyledItemDelegate>
+#include <QTextDocument>
 #include <QVBoxLayout>
 #include "src/ui/common/Confirm.h"
 
 namespace nv::ui {
 
 namespace {
+
+// 채널 아이템 본문은 Qt::DisplayRole에 담긴 HTML(이름/상태/URL/신호점·패킷)을 그린다.
+// 자식 위젯(setItemWidget) 대신 델리게이트로 그려야 QListWidget의 DnD 재배열·선택·
+// 컨텍스트 메뉴(viewport 이벤트)가 그대로 보존된다.
+class RichItemDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        QStyleOptionViewItem opt(option);
+        initStyleOption(&opt, index);
+        QStyle* style = opt.widget ? opt.widget->style() : QApplication::style();
+
+        const QString html = opt.text;
+        opt.text.clear();   // 배경/선택 하이라이트만 기본 스타일로, 텍스트는 직접 렌더
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
+
+        QTextDocument doc;
+        doc.setDefaultFont(opt.font);
+        doc.setHtml(html);
+        const QRect r = opt.rect.adjusted(kPadX, kPadY, -kPadX, -kPadY);
+        doc.setTextWidth(r.width());
+
+        painter->save();
+        painter->translate(r.topLeft());
+        QAbstractTextDocumentLayout::PaintContext ctx;
+        ctx.clip = QRectF(0, 0, r.width(), r.height());
+        doc.documentLayout()->draw(painter, ctx);
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem& option,
+                   const QModelIndex& index) const override {
+        QStyleOptionViewItem opt(option);
+        initStyleOption(&opt, index);
+
+        int avail = 0;
+        if (auto* view = qobject_cast<const QAbstractItemView*>(opt.widget))
+            avail = view->viewport()->width();
+        if (avail <= 2 * kPadX) avail = (opt.rect.width() > 0 ? opt.rect.width() : 240);
+        const int w = avail - 2 * kPadX;
+
+        QTextDocument doc;
+        doc.setDefaultFont(opt.font);
+        doc.setHtml(opt.text);
+        doc.setTextWidth(w);
+        return QSize(avail, static_cast<int>(doc.size().height()) + 2 * kPadY);
+    }
+
+private:
+    static constexpr int kPadX = 8;
+    static constexpr int kPadY = 5;
+};
+
+// 패킷 경과시간 기반 색 (레거시 팔레트). ms<0 = 이력 없음.
+const char* packetColor(qlonglong msSince) {
+    if (msSince < 0)    return "#888";
+    if (msSince < 1000) return "#12823b";
+    if (msSince < 3000) return "#e8a838";
+    return "#d13438";
+}
+
+// 아이템 본문 HTML 조립: 이름[상태] / URL / 패킷정보. 사용자 입력은 escape.
+// (레거시 채널 목록 패리티 — 신호 점은 표시하지 않고 텍스트 통계만 한 줄로 둔다.)
+QString buildItemHtml(const QString& name, const QString& url,
+                      const QString& statusStr, const QString& statusColor,
+                      const QString& packetText, const QString& packetCol) {
+    return QStringLiteral(
+        "<div>"
+          "<span style='color:#222; font-weight:bold'>%1</span>"
+          "&nbsp;&nbsp;<span style='color:%2'>[%3]</span>"
+          "<br><span style='color:#888; font-size:11px'>%4</span>"
+          "<br><span style='color:%5; font-size:11px'>%6</span>"
+        "</div>")
+        .arg(name.toHtmlEscaped(), statusColor, statusStr.toHtmlEscaped(),
+             url.toHtmlEscaped(), packetCol, packetText.toHtmlEscaped());
+}
 // InternalMove 드롭 후 새 행 순서를 콜백으로 알리는 QListWidget. InternalMove는 Qt 버전에
 // 따라 rowsMoved 대신 remove+insert로 구현될 수 있어 dropEvent 종료 시점에 순서를 읽는다.
 // Q_OBJECT 미사용(시그널/슬롯 없음, std::function 콜백) — moc 불필요.
@@ -85,8 +170,10 @@ ChannelListPanel::ChannelListPanel(Callbacks cb, QWidget* parent)
     };
     m_list->setStyleSheet(QStringLiteral(
         "QListWidget { background-color: #ffffff; color: #222; border: 1px solid #d0d0d0; }"
-        "QListWidget::item { padding: 4px 8px; border-bottom: 1px solid #eeeeee; }"
+        "QListWidget::item { border-bottom: 1px solid #eeeeee; }"   // 여백은 델리게이트가 처리
         "QListWidget::item:selected { background-color: #cfe8ff; color: #111; }"));
+    // 아이템 본문(이름/상태/URL/신호점·패킷)을 HTML로 렌더 — DnD/선택/컨텍스트 메뉴 보존.
+    m_list->setItemDelegate(new RichItemDelegate(m_list));
     m_list->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_list, &QListWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
         auto* item = m_list->itemAt(pos);
@@ -158,9 +245,13 @@ void ChannelListPanel::updateChannels(const std::vector<nv::domain::ChannelConfi
     m_configs = configs;
     m_list->clear();
     for (const auto& cfg : configs) {
-        auto* item = new QListWidgetItem(
-            QStringLiteral("%1\n%2").arg(QString::fromStdString(cfg.name),
-                                         QString::fromStdString(cfg.url)));
+        const QString name = QString::fromStdString(cfg.name);
+        const QString url  = QString::fromStdString(cfg.url);
+        // 초기 상태(대기) — 첫 updateStatus가 곧 상태/패킷정보로 덮어쓴다.
+        auto* item = new QListWidgetItem();
+        item->setData(Qt::DisplayRole,
+            buildItemHtml(name, url, QStringLiteral("대기"), QStringLiteral("#666"),
+                          QStringLiteral("패킷 —"), QString::fromLatin1(packetColor(-1))));
         // DnD 재배열 후 행→채널 매핑용. 드롭 시 UserRole에서 id 순서를 읽는다.
         item->setData(Qt::UserRole, QString::fromStdString(cfg.id));
         m_list->addItem(item);
@@ -190,25 +281,28 @@ static QString channelStatusColor(const QString& state) {
 }
 
 void ChannelListPanel::updateStatus(const QString& channelId, const QString& state,
-                                    const QString& reason) {
+                                    const QString& reason, double pps, qlonglong msSince) {
     for (int i = 0; i < static_cast<int>(m_configs.size()); ++i) {
-        if (QString::fromStdString(m_configs[static_cast<size_t>(i)].id) == channelId) {
-            auto* item = m_list->item(i);
-            if (item) {
-                const QString displayState = channelStatusText(state);
-                const QString color        = channelStatusColor(state);
-                QString statusStr = displayState;
-                if (reason != QStringLiteral("None") && !reason.isEmpty()) {
-                    statusStr += QStringLiteral(" (%1)").arg(reason);
-                }
-                item->setText(QStringLiteral("%1  [%2]\n%3")
-                                  .arg(QString::fromStdString(m_configs[static_cast<size_t>(i)].name),
-                                       statusStr,
-                                       QString::fromStdString(m_configs[static_cast<size_t>(i)].url)));
-                item->setForeground(QColor(color));
-            }
-            break;
-        }
+        if (QString::fromStdString(m_configs[static_cast<size_t>(i)].id) != channelId) continue;
+        auto* item = m_list->item(i);
+        if (!item) break;
+
+        const QString name = QString::fromStdString(m_configs[static_cast<size_t>(i)].name);
+        const QString url  = QString::fromStdString(m_configs[static_cast<size_t>(i)].url);
+        QString statusStr  = channelStatusText(state);
+        if (reason != QStringLiteral("None") && !reason.isEmpty())
+            statusStr += QStringLiteral(" (%1)").arg(reason);
+
+        // 1번에서 타일에서 제거한 패킷정보를 채널목록 하단에 표시(레거시 패리티).
+        const QString packetText = (msSince < 0)
+            ? QStringLiteral("패킷 —")
+            : QStringLiteral("패킷 %1/s · %2초 전")
+                  .arg(pps, 0, 'f', 1).arg(msSince / 1000.0, 0, 'f', 1);
+
+        item->setData(Qt::DisplayRole,
+            buildItemHtml(name, url, statusStr, channelStatusColor(state),
+                          packetText, QString::fromLatin1(packetColor(msSince))));
+        break;
     }
 }
 
