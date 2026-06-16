@@ -369,6 +369,16 @@ void FfmpegStreamSource::run(std::string url, nv::app::StreamSourceListener* lis
                 }
             }
 
+            // 방어: 비정상 치수(손상 스트림/정수 오버플로)면 이 프레임을 버린다 — width*height*4
+            // 가 거대해지면 rgba.resize가 bad_alloc을 던져 디코드 스레드가 재시작된다. 상한은
+            // 8K(7680x4320)를 여유 있게 넘긴 8192로 둔다(정상 카메라 해상도는 모두 통과).
+            if (src->width <= 0 || src->height <= 0 || src->width > 8192 || src->height > 8192) {
+                if (!m_stop) listener->onFrameDropped();
+                if (isHwFrame) av_frame_unref(swf);
+                av_frame_unref(frm);
+                continue;
+            }
+
             sws = sws_getCachedContext(sws, src->width, src->height,
                                        static_cast<AVPixelFormat>(src->format),
                                        src->width, src->height, AV_PIX_FMT_RGBA,

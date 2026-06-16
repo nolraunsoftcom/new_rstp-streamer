@@ -46,32 +46,38 @@ RhiVideoRenderer::~RhiVideoRenderer() = default;
 void RhiVideoRenderer::present(const nv::app::FrameSurface& surface) {
     if (surface.seq == m_seq) return;
 
+    // GpuTexture 핸들 — 반납(releaseConsumed)할 때마다 nullptr로 만들어 이후 분기가 같은
+    // 핸들을 두 번 반납(double-free)하지 않게 한다. (Windows에선 m_bridgeReady가 늘 false라
+    // D3D11 경로가 반납한 뒤 macOS else-if가 또 반납하던 버그 방지.)
+    void* h = (surface.kind == nv::app::FrameSurface::Kind::GpuTexture) ? surface.gpuHandle
+                                                                        : nullptr;
+
 #if defined(_WIN32)
     // 0) Windows D3D11 GPU 변환: 디코더 NV12(AVFrame 핸들)를 공유 디바이스에서 RGBA로 변환.
     //    변환이 완료되면 AVFrame은 즉시 반납(슬라이스 풀 회수). present()=render()와 같은 UI
     //    스레드라 QRhi immediate context 경합 없음.
-    if (surface.kind == nv::app::FrameSurface::Kind::GpuTexture &&
-        surface.gpuHandle != nullptr && m_d3dReady) {
+    if (h != nullptr && m_d3dReady) {
         nv::infra::RgbaTexture rt;
-        if (m_d3dBridge.convert(surface.gpuHandle, surface.width, surface.height, rt)) {
+        if (m_d3dBridge.convert(h, surface.width, surface.height, rt)) {
             m_d3dRgbaTex = rt.tex;
             m_d3dRgbaSize = QSize(rt.width, rt.height);
             m_hasD3dPending = true;
             m_seq = surface.seq;
-            if (m_registry != nullptr) m_registry->releaseConsumed(m_channelId, surface.gpuHandle);
+            if (m_registry != nullptr) m_registry->releaseConsumed(m_channelId, h);
             update();
             return;
         }
-        // 변환 실패 → 핸들 반납 후 RGBA 폴백(동반 rgba 있으면).
-        if (m_registry != nullptr) m_registry->releaseConsumed(m_channelId, surface.gpuHandle);
+        // 변환 실패 → 핸들 반납 후 null 처리(아래 분기 재반납 방지). RGBA 폴백은 동반 rgba가
+        // 있을 때만 의미 — Windows zero-copy 프레임은 동반 rgba가 없어 그대로 마지막 프레임 유지.
+        if (m_registry != nullptr) m_registry->releaseConsumed(m_channelId, h);
+        h = nullptr;
     }
 #endif
 
     // 1) NV12 zero-copy 시도 (HW 디코드 + macOS). bridge 미초기화면 건너뜀(RGBA 폴백).
-    if (surface.kind == nv::app::FrameSurface::Kind::GpuTexture &&
-        surface.gpuHandle != nullptr && m_bridgeReady) {
+    if (h != nullptr && m_bridgeReady) {
         nv::infra::PlaneTextures planes;
-        if (m_bridge.map(surface.gpuHandle, planes)) {
+        if (m_bridge.map(h, planes)) {
             // 직전에 보류만 되고 아직 안 그려진 NV12 프레임이 있으면 그것부터 정리
             // (render()가 소비하기 전 새 present가 또 옴 — 스킵된 프레임). 핸들 반납.
             if (m_hasNv12Pending) {
@@ -84,7 +90,7 @@ void RhiVideoRenderer::present(const nv::app::FrameSurface& surface) {
                 m_pendingHandle = nullptr;
             }
             m_pendingPlanes = planes;
-            m_pendingHandle = surface.gpuHandle;          // 소비자 소유 ref — 우리가 인수
+            m_pendingHandle = h;                          // 소비자 소유 ref — 우리가 인수
             m_pendingFullRange = planes.fullRange ? 1 : 0;
             m_hasNv12Pending = true;
             m_seq = surface.seq;
@@ -93,13 +99,14 @@ void RhiVideoRenderer::present(const nv::app::FrameSurface& surface) {
         }
         // map 실패 → 핸들은 우리가 받았으니 즉시 반납 후 RGBA 폴백으로.
         if (m_registry != nullptr) {
-            m_registry->releaseConsumed(m_channelId, surface.gpuHandle);
+            m_registry->releaseConsumed(m_channelId, h);
         }
-    } else if (surface.kind == nv::app::FrameSurface::Kind::GpuTexture &&
-               surface.gpuHandle != nullptr && m_registry != nullptr) {
+        h = nullptr;
+    } else if (h != nullptr && m_registry != nullptr) {
         // bridge 미준비(예: 비-Apple, 캐시 실패)인데 GpuTexture 핸들을 받았다 — RGBA 폴백을
         // 쓰므로 핸들은 즉시 반납한다(누수 방지).
-        m_registry->releaseConsumed(m_channelId, surface.gpuHandle);
+        m_registry->releaseConsumed(m_channelId, h);
+        h = nullptr;
     }
 
     // 2) RGBA 폴백(CpuRgba, 또는 zero-copy 실패한 GpuTexture의 동반 rgba).
