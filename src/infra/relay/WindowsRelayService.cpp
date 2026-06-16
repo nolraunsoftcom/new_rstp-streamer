@@ -5,41 +5,31 @@
 // Windows 헤더 (최소화)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <array>
+#include <tlhelp32.h>
 #include <cstdio>
-#include <sstream>
 #include <string>
+#include <vector>
 
 namespace nv::infra {
 
 namespace {
 
-// popen/_popen으로 명령 실행 후 stdout 캡처 + 종료 코드 반환.
-int runCapture(const std::string& cmd, std::string* out) {
-    if (out) out->clear();
-    FILE* pipe = _popen(cmd.c_str(), "r");
-    if (!pipe) return -1;
-    if (out) {
-        std::array<char, 512> buf{};
-        while (fgets(buf.data(), static_cast<int>(buf.size()), pipe) != nullptr) {
-            *out += buf.data();
-        }
-    }
-    return _pclose(pipe);
-}
-
-// 종료 코드만 반환 (stdout 버림).
-int runSilent(const std::string& cmd) {
-    return runCapture(cmd + " >NUL 2>&1", nullptr);
+// UTF-8(std::string) → 와이드(std::wstring). Windows API는 와이드로 호출해야 한글 경로 안전.
+std::wstring toWide(const std::string& utf8) {
+    if (utf8.empty()) return {};
+    const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(),
+                                        static_cast<int>(utf8.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(len), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()),
+                        w.data(), len);
+    return w;
 }
 
 // mediamtx.exe를 실행파일(new_viewer.exe) 폴더의 절대경로로 해석한다.
-// 상대 이름("mediamtx.exe")을 그대로 sc create binPath에 넣으면 SCM이 앱 폴더가 아닌
-// System32 기준으로 찾아 실패한다. 번들된 mediamtx를 절대경로로 가리켜야 한다.
-// 앱 폴더에 없으면 원래 값(PATH 폴백) 유지.
+// 상대 이름("mediamtx.exe")이면 앱 폴더의 번들 mediamtx를 절대경로로 가리킨다(없으면 그대로).
 std::string resolveExeDir(const std::string& exe) {
     if (exe.find('\\') != std::string::npos || exe.find('/') != std::string::npos)
-        return exe;   // 이미 경로 포함
+        return exe;
     wchar_t buf[MAX_PATH];
     const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return exe;
@@ -48,13 +38,46 @@ std::string resolveExeDir(const std::string& exe) {
     if (slash == std::wstring::npos) return exe;
     const std::wstring candidate = path.substr(0, slash + 1) + L"mediamtx.exe";
     if (GetFileAttributesW(candidate.c_str()) == INVALID_FILE_ATTRIBUTES)
-        return exe;   // 앱 폴더에 없음 → PATH 폴백
+        return exe;
     const int len = WideCharToMultiByte(CP_UTF8, 0, candidate.c_str(), -1,
                                         nullptr, 0, nullptr, nullptr);
     if (len <= 0) return exe;
     std::string out(static_cast<size_t>(len - 1), '\0');
     WideCharToMultiByte(CP_UTF8, 0, candidate.c_str(), -1, out.data(), len, nullptr, nullptr);
     return out;
+}
+
+// mediamtx.exe 프로세스가 떠 있는지 (Toolhelp 스냅샷). 멱등 기동/상태 판정용.
+bool mediamtxRunning() {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32W pe{};
+    pe.dwSize = sizeof(pe);
+    bool found = false;
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, L"mediamtx.exe") == 0) { found = true; break; }
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+    return found;
+}
+
+// 떠 있는 mediamtx.exe를 모두 강제 종료 (stop/self-heal용).
+void killMediamtx() {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32W pe{};
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, L"mediamtx.exe") == 0) {
+                HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                if (h) { TerminateProcess(h, 0); CloseHandle(h); }
+            }
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
 }
 
 } // namespace
@@ -64,130 +87,60 @@ std::string resolveExeDir(const std::string& exe) {
 WindowsRelayService::WindowsRelayService(std::string mediamtxExe, std::string serviceName)
     : m_exe(resolveExeDir(mediamtxExe)), m_svcName(std::move(serviceName)) {}
 
-int WindowsRelayService::runSc(const std::string& args, std::string* out) const {
-    return runCapture("sc " + args, out);
-}
-
-bool WindowsRelayService::startViaSchtasks(const std::string& configPath, std::string& detail) {
-    // 관리자 권한 없음 → OnLogon schtasks 폴백.
-    // 사용자 세션 로그온마다 자동 기동. M5 인스톨러가 SCM 서비스로 교체할 예정.
-    const std::string tr = "\\\"" + m_exe + "\\\" \\\"" + configPath + "\\\"";
-    // 기존 태스크 삭제 (무시)
-    runSilent("schtasks /delete /tn \"" + m_svcName + "\" /f");
-    // 새 태스크 생성
-    int rc = runSilent(
-        "schtasks /create /tn \"" + m_svcName + "\""
-        " /tr \"" + tr + "\""
-        " /sc onlogon /f");
-    if (rc != 0) {
-        detail = "fallback:schtasks create failed rc=" + std::to_string(rc);
-        return false;
-    }
-    // 즉시 실행
-    rc = runSilent("schtasks /run /tn \"" + m_svcName + "\"");
-    if (rc != 0) {
-        detail = "fallback:schtasks run failed rc=" + std::to_string(rc);
-        return false;
-    }
-    detail = "fallback:schtasks";
-    return true;
-}
-
 bool WindowsRelayService::ensureRunning(const std::string& configPath) {
-    // 멱등: 이미 같은 설정으로 실행 중이면 재시작하지 않는다. viewer가 매 기동마다 ensureUp→
-    // 이 함수를 호출하는데, 실행 중인 relay를 재등록하면 장비 RTSP 세션이 매번 churn돼
-    // 보호막이 무효화된다(1h 스트레스에서 viewer재시작 N회=장비close N회로 발견).
-    // SCM 서비스 경로(sc qc)에서 configPath와 m_exe를 확인한다.
-    {
-        std::string qcOut;
-        int qcrc = runSc("qc \"" + m_svcName + "\"", &qcOut);
-        if (qcrc == 0 &&
-            qcOut.find(configPath) != std::string::npos &&
-            qcOut.find(m_exe) != std::string::npos &&
-            status().running) {
-            return true;   // 이미 동일 설정으로 가동 중 — 재시작 금지
-        }
-        // schtasks 폴백 경로: schtasks /query /v /tn 으로 TR(Task to Run) 확인
-        if (qcrc != 0) {
-            std::string stOut;
-            int strc = runCapture(
-                "schtasks /query /tn \"" + m_svcName + "\" /v /fo list 2>NUL",
-                &stOut);
-            if (strc == 0 &&
-                stOut.find(configPath) != std::string::npos &&
-                stOut.find(m_exe) != std::string::npos &&
-                status().running) {
-                return true;   // schtasks 폴백도 동일 설정으로 가동 중 — 재시작 금지
-            }
-        }
+    // 멱등: 이미 떠 있으면 재기동하지 않는다(보호막 — viewer 재시작이 장비 세션을 churn하지
+    // 않게). config 파일은 호출 전에 갱신되며 mediamtx가 파일 변경을 감지해 핫리로드한다.
+    if (mediamtxRunning()) {
+        return true;
     }
 
-    // 1) 이미 서비스가 설치됐는지 확인
-    std::string queryOut;
-    int qrc = runSc("query \"" + m_svcName + "\"", &queryOut);
-    const bool installed = (qrc == 0);
+    // mediamtx.exe <configPath> 를 분리된 자식 프로세스로 기동한다.
+    // 기존엔 sc/schtasks를 _popen으로 호출했으나, 콘솔 없는 GUI 앱에서 _popen이 CRT
+    // invalid_parameter fast-fail(0xc0000409)로 앱을 죽였다. CreateProcessW로 직접 실행하면:
+    //   • _popen 미사용 → 크래시 없음
+    //   • 사용자 계정으로 실행 → %LOCALAPPDATA% config 읽기 가능(SCM SYSTEM 계정 문제 해소)
+    //   • 와이드 경로 → 한글 경로(영상관리시스템) 안전
+    //   • 관리자 권한 불필요
+    //   • CREATE_NO_WINDOW → 콘솔 창 안 뜸. 자식은 부모(viewer) 종료 후에도 계속 실행됨.
+    const std::wstring exeW = toWide(m_exe);
+    const std::wstring cfgW = toWide(configPath);
+    std::wstring cmdline = L"\"" + exeW + L"\" \"" + cfgW + L"\"";
 
-    if (!installed) {
-        // 2) sc create 시도 (관리자 권한 필요)
-        //    binPath에 실행파일+인수를 넣으면 서비스 시작 시 mediamtx configPath로 기동된다.
-        const std::string binPath =
-            "\\\"" + m_exe + "\\\" \\\"" + configPath + "\\\"";
-        int crc = runSc(
-            "create \"" + m_svcName + "\""
-            " binPath= \"" + binPath + "\""
-            " start= auto"
-            " DisplayName= \"NewViewer MediaMTX Relay\"",
-            nullptr);
-        if (crc != 0) {
-            // 관리자 권한 없음 — schtasks 폴백
-            std::string detail;
-            return startViaSchtasks(configPath, detail);
-        }
-        // sc description 설정 (실패 무시)
-        runSc("description \"" + m_svcName + "\" \"NewViewer MediaMTX relay service\"",
-              nullptr);
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+
+    std::vector<wchar_t> cmdBuf(cmdline.begin(), cmdline.end());
+    cmdBuf.push_back(L'\0');   // CreateProcessW는 lpCommandLine을 수정할 수 있어 가변 버퍼 필요
+
+    const BOOL ok = CreateProcessW(
+        exeW.c_str(),       // lpApplicationName (절대경로)
+        cmdBuf.data(),      // lpCommandLine
+        nullptr, nullptr, FALSE,
+        CREATE_NO_WINDOW,
+        nullptr, nullptr, &si, &pi);
+
+    if (!ok) {
+        std::fprintf(stderr, "[WindowsRelayService] CreateProcessW 실패 (err=%lu) exe=%s\n",
+                     GetLastError(), m_exe.c_str());
+        return false;
     }
-
-    // 3) 서비스 기동 (이미 기동 중이면 무시)
-    int src = runSc("start \"" + m_svcName + "\"", nullptr);
-    // 1056 = ERROR_SERVICE_ALREADY_RUNNING → 정상
-    (void)src;
-
-    return status().running;
+    // 핸들을 닫아도 프로세스는 계속 실행된다(분리). 부모 종료 후에도 mediamtx 유지.
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
 }
 
 nv::app::RelayServiceStatus WindowsRelayService::status() const {
     nv::app::RelayServiceStatus s;
-
-    std::string queryOut;
-    int rc = runSc("query \"" + m_svcName + "\"", &queryOut);
-    s.installed = (rc == 0);
-    s.detail    = queryOut.substr(0, 400);
-
-    if (s.installed) {
-        // STATE 행: "STATE              : 4  RUNNING"
-        s.running = (queryOut.find("RUNNING") != std::string::npos);
-    } else {
-        // schtasks 폴백으로 기동된 경우: 프로세스 이름으로 간이 확인
-        std::string tasklist;
-        runCapture("tasklist /fi \"imagename eq mediamtx.exe\" /fo csv /nh 2>NUL",
-                   &tasklist);
-        s.running = (tasklist.find("mediamtx.exe") != std::string::npos);
-        if (s.running) s.detail = "fallback:schtasks running";
-    }
-
+    s.running   = mediamtxRunning();
+    s.installed = s.running;   // 별도 설치 개념 없음(자식 프로세스 방식)
+    s.detail    = s.running ? "mediamtx running (child process)" : "mediamtx not running";
     return s;
 }
 
 bool WindowsRelayService::stop() {
-    // SCM 서비스 정지
-    runSc("stop \"" + m_svcName + "\"", nullptr);
-    // SCM 서비스 삭제
-    runSc("delete \"" + m_svcName + "\"", nullptr);
-    // schtasks 폴백 정리
-    runSilent("schtasks /delete /tn \"" + m_svcName + "\" /f");
-    // taskkill (남은 프로세스)
-    runSilent("taskkill /im mediamtx.exe /f");
+    killMediamtx();
     return true;
 }
 

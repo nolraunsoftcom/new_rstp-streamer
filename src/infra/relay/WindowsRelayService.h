@@ -27,14 +27,8 @@ public:
     bool stop() override;
 
 private:
-    std::string m_exe;
-    std::string m_svcName;
-
-    // sc 명령어 실행 후 exit code 반환. output은 선택적 캡처.
-    int runSc(const std::string& args, std::string* out = nullptr) const;
-
-    // schtasks 폴백 기동
-    bool startViaSchtasks(const std::string& configPath, std::string& detail);
+    std::string m_exe;       // mediamtx.exe 절대 경로(UTF-8)
+    std::string m_svcName;   // (구 SCM 서비스명 — 현재 미사용, 인터페이스 호환 유지)
 };
 
 } // namespace nv::infra
