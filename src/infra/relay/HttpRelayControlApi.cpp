@@ -1,15 +1,12 @@
 #include "HttpRelayControlApi.h"
 
-#include <QEventLoop>
+#include <QAbstractSocket>
+#include <QByteArray>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QNetworkAccessManager>
-#include <QNetworkProxy>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QString>
-#include <QTimer>
+#include <QTcpSocket>
 #include <QUrl>
 
 #include <cstdio>
@@ -22,60 +19,51 @@ HttpRelayControlApi::HttpRelayControlApi(std::string apiBase,
 
 std::vector<nv::app::RelayPathHealth> HttpRelayControlApi::pathsHealth() {
     std::fprintf(stderr, "[relayapi] pathsHealth start %s\n", m_apiBase.c_str());
-    // QNetworkAccessManager는 QCoreApplication event loop가 존재해야 정상 동작한다.
-    // 워커 스레드(RelayCoordinator)에서 호출된다.
-    QNetworkAccessManager mgr;
-    // 로컬(127.0.0.1) 조회엔 프록시가 불필요. Windows에서 기본 프록시 탐지는 WinHTTP/COM
-    // 경로를 타는데, COM 미초기화 워커 스레드에서 fail-fast(0xc0000409) 가능 → NoProxy로 차단.
-    mgr.setProxy(QNetworkProxy::NoProxy);
-    mgr.setTransferTimeout(static_cast<int>(m_timeout.count()));
+    // 기존엔 QNetworkAccessManager를 썼으나 워커 스레드 + Windows에서 프록시 탐지(WinHTTP/COM)·
+    // 백엔드 스레드 기계장치 때문에 fail-fast(0xc0000409)가 간헐 발생했다(relay 채널일 때만 폴링).
+    // localhost 단일 GET이므로 가벼운 QTcpSocket 동기 호출로 교체 — 이벤트루프/프록시/백엔드
+    // 불필요, 어느 스레드에서도 안전.
+    const int tmo = static_cast<int>(m_timeout.count());
+    const QUrl base(QString::fromStdString(m_apiBase));
+    const QString host = base.host().isEmpty() ? QStringLiteral("127.0.0.1") : base.host();
+    const quint16 port = static_cast<quint16>(base.port(9997));
 
-    const QUrl url(QString::fromStdString(m_apiBase + "/v3/paths/list"));
-    QNetworkRequest req(url);
-    req.setRawHeader("Accept", "application/json");
-
-    QNetworkReply* reply = mgr.get(req);
-
-    QEventLoop loop;
-    QTimer timer;
-    timer.setSingleShot(true);
-    timer.setInterval(static_cast<int>(m_timeout.count()));
-
-    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
-    timer.start();
-    loop.exec();
-    timer.stop();
-
-    // 타임아웃 또는 미완료
-    if (!reply->isFinished()) {
-        reply->abort();
-        reply->deleteLater();
-        std::fprintf(stderr, "[HttpRelayControlApi] timeout: %s\n",
-                     url.toString().toStdString().c_str());
+    QTcpSocket sock;
+    sock.connectToHost(host, port);
+    if (!sock.waitForConnected(tmo)) {
+        std::fprintf(stderr, "[relayapi] connect failed %s:%u\n", host.toUtf8().constData(), port);
         return {};
     }
 
-    // 네트워크 오류
-    if (reply->error() != QNetworkReply::NoError) {
-        std::fprintf(stderr, "[HttpRelayControlApi] network error: %s\n",
-                     reply->errorString().toStdString().c_str());
-        reply->deleteLater();
+    const QByteArray request =
+        "GET /v3/paths/list HTTP/1.0\r\n"
+        "Host: " + host.toUtf8() + "\r\n"
+        "Accept: application/json\r\n"
+        "Connection: close\r\n\r\n";
+    sock.write(request);
+    if (!sock.waitForBytesWritten(tmo)) { return {}; }
+
+    // HTTP/1.0 + Connection: close → 서버가 본문 후 연결을 닫는다. 닫힐 때까지 읽는다.
+    QByteArray resp;
+    while (sock.state() == QAbstractSocket::ConnectedState) {
+        if (!sock.waitForReadyRead(tmo)) break;   // 타임아웃 또는 원격 닫힘
+        resp += sock.readAll();
+    }
+    resp += sock.readAll();   // 닫힘 직전 잔여 바이트
+    sock.abort();
+
+    const int hdrEnd = resp.indexOf("\r\n\r\n");
+    if (hdrEnd < 0) {
+        std::fprintf(stderr, "[relayapi] no HTTP header end (resp=%lld bytes)\n",
+                     static_cast<long long>(resp.size()));
         return {};
     }
-
-    // HTTP 상태 확인
-    const int httpStatus =
-        reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    if (httpStatus != 200) {
-        std::fprintf(stderr, "[HttpRelayControlApi] HTTP %d from %s\n", httpStatus,
-                     url.toString().toStdString().c_str());
-        reply->deleteLater();
+    const QByteArray statusLine = resp.left(resp.indexOf("\r\n"));
+    if (!statusLine.contains(" 200")) {
+        std::fprintf(stderr, "[relayapi] non-200: %s\n", statusLine.constData());
         return {};
     }
-
-    const QByteArray body = reply->readAll();
-    reply->deleteLater();
+    const QByteArray body = resp.mid(hdrEnd + 4);
 
     // JSON 파싱
     QJsonParseError parseErr;
