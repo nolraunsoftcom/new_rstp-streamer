@@ -18,6 +18,13 @@ std::unique_ptr<nv::app::IStreamSource> ChannelSourceFactory::createSource(
         if (!s) s = std::make_unique<LatestSurfaceSlot>();
         slot = s.get();
     }
+    // jitter 평탄화 FIFO 깊이: 기본 2(~66ms@30fps). NV_JITTER_DEPTH로 측정/튜닝(1=버퍼링 없음).
+    static const std::size_t kJitterDepth = [] {
+        const char* e = std::getenv("NV_JITTER_DEPTH");
+        const int d = (e != nullptr) ? std::atoi(e) : 2;
+        return static_cast<std::size_t>(d < 1 ? 1 : d);
+    }();
+    slot->setDepth(kJitterDepth);
     // Bundle 생성자가 m_bundles에 자기를 등록한다(소멸 시 자동 해제).
     return std::make_unique<Bundle>(*this, channelId, *slot, m_executor);
 }

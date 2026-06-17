@@ -41,6 +41,9 @@ void setupD3d11FramesCtx(AVCodecContext* ctx, AVPixelFormat hwPix) {
     auto* fctx  = reinterpret_cast<AVHWFramesContext*>(frames->data);
     auto* d3dfc = reinterpret_cast<AVD3D11VAFramesContext*>(fctx->hwctx);
     d3dfc->BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+    // jitter FIFO(LatestSurfaceSlot)가 디코더 surface를 표시 depth만큼, 렌더러가 in-flight로
+    // 추가로 붙든다. 기본 풀에 여유분을 더해 surface 고갈→디코드 stall을 막는다(zero-copy 경로).
+    if (fctx->initial_pool_size > 0) fctx->initial_pool_size += 6;
     if (av_hwframe_ctx_init(frames) < 0) {
         av_buffer_unref(&frames);
         return;
