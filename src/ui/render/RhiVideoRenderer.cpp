@@ -1,6 +1,7 @@
 #include "RhiVideoRenderer.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <QFile>
 #include <rhi/qrhi.h>
 #include <rhi/qrhi_platform.h>
@@ -300,15 +301,18 @@ void RhiVideoRenderer::initialize(QRhiCommandBuffer*) {
 #endif
 
 #if defined(_WIN32)
-    // Windows: QRhi의 ID3D11Device로 D3D11 변환 브리지 init. 성공해야만 SharedGpuDevice에 등록
-    // → 디코드측이 같은 디바이스로 hw를 만들어 zero-copy. init 실패면 미등록 → 디코드 CPU 폴백.
-    if (!m_d3dReady) {
+    // Windows D3D11 GPU 변환(zero-copy)은 기본 OFF, NV_D3D11_ZEROCOPY=1로 opt-in.
+    // 이유: QRhi 디바이스를 FFmpeg와 공유하면 immediate context 1개를 UI 렌더 + 디코드
+    // 스레드들이 공유 → 멀티채널에서 컨텍스트 락 경합으로 UI가 멈추고("응답없음") 죽는다.
+    // 기본은 미등록 → 디코드가 자체 디바이스로 → CPU 변환 경로(안정). 하드닝 후 기본화 검토.
+    if (!m_d3dReady && std::getenv("NV_D3D11_ZEROCOPY") != nullptr) {
         const QRhiNativeHandles* nh = m_rhi->nativeHandles();
         const auto* dh = static_cast<const QRhiD3D11NativeHandles*>(nh);
         if (dh != nullptr && dh->dev != nullptr) {
             if (m_d3dBridge.init(dh->dev)) {
                 m_d3dReady = true;
                 nv::infra::SharedGpuDevice::setD3d11Device(dh->dev);
+                std::fprintf(stderr, "[RhiVideoRenderer] D3D11 zero-copy ENABLED (opt-in)\n");
             }
         }
     }
